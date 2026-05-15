@@ -1,6 +1,5 @@
 cmake_minimum_required(VERSION 3.14 FATAL_ERROR)
 project(HPTT
-    VERSION 1.0.0
     DESCRIPTION "High-Performance Tensor Transpose library"
     LANGUAGES C CXX)
 
@@ -95,14 +94,6 @@ if(APPLE)
 endif()
 
 set(HPTT_SRCS src/hptt.cpp src/plan.cpp src/transpose.cpp src/utils.cpp)
-set(HPTT_INCLUDES
-    include/compute_node.h
-    include/hptt_types.h
-    include/hptt.h
-    include/macros.h
-    include/plan.h
-    include/utils.h
-    include/transpose.h)
 
 find_package(OpenMP REQUIRED)
 
@@ -149,8 +140,7 @@ if(HPTT_INSTALL)
             LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
             RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 
-    install(FILES ${HPTT_INCLUDES}
-            DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+    install(DIRECTORY include/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
 
     # Generate hpttTargets.cmake (defines `hptt::hptt_static` /
     # `hptt::hptt_dyn` for find_package(hptt CONFIG) consumers).
@@ -169,13 +159,11 @@ if(HPTT_INSTALL)
         "${CMAKE_CURRENT_BINARY_DIR}/hpttConfig.cmake"
         INSTALL_DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/hptt)
 
-    write_basic_package_version_file(
-        "${CMAKE_CURRENT_BINARY_DIR}/hpttConfigVersion.cmake"
-        VERSION ${PROJECT_VERSION}
-        COMPATIBILITY SameMajorVersion)
-
+    # Note: no hpttConfigVersion.cmake is shipped because HPTT does not
+    # carry a declared version (no git tags, no version file). Consumers
+    # calling `find_package(hptt CONFIG)` without a version request work;
+    # `find_package(hptt 1.0 CONFIG)` would fail at the version check.
     install(FILES
         "${CMAKE_CURRENT_BINARY_DIR}/hpttConfig.cmake"
-        "${CMAKE_CURRENT_BINARY_DIR}/hpttConfigVersion.cmake"
         DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/hptt)
 endif()
