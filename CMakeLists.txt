@@ -1,105 +1,191 @@
-
 cmake_minimum_required(VERSION 3.14 FATAL_ERROR)
-project (HPTT C CXX)
+project(HPTT
+    VERSION 1.0.0
+    DESCRIPTION "High-Performance Tensor Transpose library"
+    LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
-option(ENABLE_IBM "ENABLE IBM" OFF)
-option(ENABLE_AVX "ENABLE AVX" OFF)
-option(ENABLE_ARM "ENABLE ARM" OFF)
-option(FINE_TUNE "FINE TUNE for native hardware" OFF)
 
-#if(CMAKE_SYSTEM_PROCESSOR STREQUAL "ppc64le")
-#  set(ENABLE_IBM ON)
-#endif()
+include(GNUInstallDirs)
+include(CMakePackageConfigHelpers)
 
-#set(FINE_TUNE OFF)
+option(ENABLE_IBM "Enable IBM POWER architecture support" OFF)
+option(ENABLE_AVX "Enable x86 AVX (REGISTER_BITS=256) support" OFF)
+option(ENABLE_ARM "Enable ARM/Neon (REGISTER_BITS=128) support" OFF)
+option(FINE_TUNE "Fine-tune for the host CPU (uses -march=native; produces non-portable binaries)" OFF)
+
+# HPTT_INSTALL: ON by default for standalone builds, but a parent project
+# using add_subdirectory() can set it OFF if it doesn't want HPTT to emit
+# its own install rules (e.g. when the parent prefers to ship libhptt and
+# its headers from its own install layout).
+option(HPTT_INSTALL "Generate install rules for HPTT" ON)
+
+# -----------------------------------------------------------------------------
+# Build flags split by *visibility* to consumers.
+#
+#   HPTT_PRIVATE_COMPILE_OPTIONS
+#       Optimization / architecture flags (e.g. -march=native, -O3,
+#       -ffast-math, -fopenmp). PRIVATE: applied only when compiling HPTT's
+#       own .cpp files. Downstream consumers that link against libhptt
+#       must NOT silently inherit these — flags like -ffast-math or
+#       -march=native change floating-point semantics across the
+#       boundary and break the consumer's own numerical tests.
+#
+#   HPTT_PUBLIC_COMPILE_DEFINITIONS
+#       Preprocessor switches that appear in HPTT's *public* headers
+#       (currently `include/hptt_types.h` checks `HPTT_ARCH_ARM` to set
+#       REGISTER_BITS). PUBLIC: consumers including HPTT headers must see
+#       the same value HPTT was built with, otherwise the macro silently
+#       diverges across the build / use boundary.
+# -----------------------------------------------------------------------------
+set(HPTT_PRIVATE_COMPILE_OPTIONS)
+set(HPTT_PUBLIC_COMPILE_DEFINITIONS)
 
 if(CMAKE_CXX_COMPILER_ID STREQUAL "Intel")
-  set(HPTT_CXX_FLAGS ${HPTT_CXX_FLAGS} -qopenmp -xhost)
+    list(APPEND HPTT_PRIVATE_COMPILE_OPTIONS -qopenmp -xhost)
 elseif(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
-  if(ENABLE_IBM)
-    set(HPTT_CXX_FLAGS ${HPTT_CXX_FLAGS} -fopenmp)
-  elseif(APPLE)
-	  set(HPTT_CXX_FLAGS ${HPTT_CXX_FLAGS} -fopenmp -mtune=native)
-  else()
-    set(HPTT_CXX_FLAGS ${HPTT_CXX_FLAGS} -fopenmp)
-    if(FINE_TUNE)
-        set(HPTT_CXX_FLAGS ${HPTT_CXX_FLAGS} -march=native -mtune=native)
+    if(ENABLE_IBM)
+        list(APPEND HPTT_PRIVATE_COMPILE_OPTIONS -fopenmp)
+    elseif(APPLE)
+        list(APPEND HPTT_PRIVATE_COMPILE_OPTIONS -fopenmp -mtune=native)
     else()
-        set(HPTT_CXX_FLAGS ${HPTT_CXX_FLAGS} -march=x86-64 -mtune=generic)
+        list(APPEND HPTT_PRIVATE_COMPILE_OPTIONS -fopenmp)
+        if(FINE_TUNE)
+            list(APPEND HPTT_PRIVATE_COMPILE_OPTIONS -march=native -mtune=native)
+        else()
+            list(APPEND HPTT_PRIVATE_COMPILE_OPTIONS -march=x86-64 -mtune=generic)
+        endif()
     endif()
-  endif()
-elseif(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
-    set(HPTT_CXX_FLAGS ${HPTT_CXX_FLAGS} -fopenmp -march=native)
+elseif(CMAKE_CXX_COMPILER_ID STREQUAL "Clang" OR CMAKE_CXX_COMPILER_ID STREQUAL "AppleClang")
     if(FINE_TUNE)
-        set(HPTT_CXX_FLAGS ${HPTT_CXX_FLAGS} -fopenmp -march=native)
+        list(APPEND HPTT_PRIVATE_COMPILE_OPTIONS -fopenmp -march=native)
     else()
-        set(HPTT_CXX_FLAGS ${HPTT_CXX_FLAGS} -fopenmp)
+        list(APPEND HPTT_PRIVATE_COMPILE_OPTIONS -fopenmp)
     endif()
 elseif(CMAKE_CXX_COMPILER_ID STREQUAL "PGI")
-  set(HPTT_CXX_FLAGS ${HPTT_CXX_FLAGS} -silent -w -Mnovect)
+    list(APPEND HPTT_PRIVATE_COMPILE_OPTIONS -silent -w -Mnovect)
 elseif(CMAKE_CXX_COMPILER_ID STREQUAL "XL")
-  set(HPTT_CXX_FLAGS ${HPTT_CXX_FLAGS} -qsmp=omp)
+    list(APPEND HPTT_PRIVATE_COMPILE_OPTIONS -qsmp=omp)
 endif()
 
 if(ENABLE_AVX)
-  set(HPTT_CXX_FLAGS ${HPTT_CXX_FLAGS} -mavx -DHPTT_ARCH_AVX)
+    list(APPEND HPTT_PRIVATE_COMPILE_OPTIONS -mavx)
+    list(APPEND HPTT_PUBLIC_COMPILE_DEFINITIONS HPTT_ARCH_AVX)
 elseif(ENABLE_ARM)
-  set(HPTT_CXX_FLAGS ${HPTT_CXX_FLAGS} -mfpu=neon -DHPTT_ARCH_ARM)
+    list(APPEND HPTT_PRIVATE_COMPILE_OPTIONS -mfpu=neon)
+    list(APPEND HPTT_PUBLIC_COMPILE_DEFINITIONS HPTT_ARCH_ARM)
 elseif(ENABLE_IBM)
-  set(HPTT_CXX_FLAGS ${HPTT_CXX_FLAGS} -mtune=native -DHPTT_ARCH_IBM -maltivec -mabi=altivec)
+    list(APPEND HPTT_PRIVATE_COMPILE_OPTIONS -mtune=native -maltivec -mabi=altivec)
+    list(APPEND HPTT_PUBLIC_COMPILE_DEFINITIONS HPTT_ARCH_IBM)
 endif()
 
 if(APPLE)
     if(CMAKE_SYSTEM_PROCESSOR MATCHES "arm64")
         message(STATUS "Running on Apple Silicon (M-series)")
-		set(HPTT_CXX_FLAGS ${HPTT_CXX_FLAGS} -O3 -ffast-math -funroll-loops -ftree-vectorize
-	 -mcpu=native -DHPTT_ARCH_ARM)
+        list(APPEND HPTT_PRIVATE_COMPILE_OPTIONS
+            -O3 -ffast-math -funroll-loops -ftree-vectorize -mcpu=native)
+        list(APPEND HPTT_PUBLIC_COMPILE_DEFINITIONS HPTT_ARCH_ARM)
     elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64")
         message(STATUS "Running on Intel-based macOS")
-		set(HPTT_CXX_FLAGS ${HPTT_CXX_FLAGS} -O3 -ffast-math -funroll-loops -ftree-vectorize -mavx -DHPTT_ARCH_AVX)
+        list(APPEND HPTT_PRIVATE_COMPILE_OPTIONS
+            -O3 -ffast-math -funroll-loops -ftree-vectorize -mavx)
+        list(APPEND HPTT_PUBLIC_COMPILE_DEFINITIONS HPTT_ARCH_AVX)
     endif()
 endif()
 
 set(HPTT_SRCS src/hptt.cpp src/plan.cpp src/transpose.cpp src/utils.cpp)
-
-add_library(hptt_static STATIC ${HPTT_SRCS})
-target_compile_features(hptt_static PUBLIC cxx_std_11)
-set_target_properties(hptt_static PROPERTIES OUTPUT_NAME hptt)
-target_include_directories(hptt_static PUBLIC ${PROJECT_SOURCE_DIR}/include)
-target_compile_options(hptt_static PUBLIC ${HPTT_CXX_FLAGS})
-
-add_library(hptt_dyn SHARED ${HPTT_SRCS})
-target_compile_features(hptt_dyn PUBLIC cxx_std_11)
-set_target_properties(hptt_dyn PROPERTIES OUTPUT_NAME hptt)
-target_include_directories(hptt_dyn PUBLIC ${PROJECT_SOURCE_DIR}/include)
-target_compile_options(hptt_dyn PUBLIC ${HPTT_CXX_FLAGS})
-
-
-find_package(OpenMP REQUIRED)
-target_link_libraries(hptt_static PUBLIC OpenMP::OpenMP_CXX)
-target_link_libraries(hptt_dyn PUBLIC OpenMP::OpenMP_CXX)
-
-
-install(TARGETS hptt_static
-        LIBRARY DESTINATION ${CMAKE_INSTALL_PREFIX}/lib
-        ARCHIVE DESTINATION ${CMAKE_INSTALL_PREFIX}/lib)
-
-install(TARGETS hptt_dyn
-        LIBRARY DESTINATION ${CMAKE_INSTALL_PREFIX}/lib
-        ARCHIVE DESTINATION ${CMAKE_INSTALL_PREFIX}/lib)
-
-
-set(HPTT_INCLUDES 
-    include/compute_node.h 
-    include/hptt_types.h 
-    include/hptt.h 
-    include/macros.h 
-    include/plan.h 
-    include/utils.h 
+set(HPTT_INCLUDES
+    include/compute_node.h
+    include/hptt_types.h
+    include/hptt.h
+    include/macros.h
+    include/plan.h
+    include/utils.h
     include/transpose.h)
 
-install(FILES ${HPTT_INCLUDES}
-        DESTINATION ${CMAKE_INSTALL_PREFIX}/include)
+find_package(OpenMP REQUIRED)
+
+# Configure both targets (static + shared) identically.
+function(hptt_configure_target target)
+    target_compile_features(${target} PUBLIC cxx_std_11)
+    set_target_properties(${target} PROPERTIES OUTPUT_NAME hptt)
+
+    # Generator-expression-wrapped include dir: the source-tree path is
+    # only visible *during the build*; after install, the path resolves to
+    # the installed include dir. Without this, install(EXPORT ...) rejects
+    # the absolute source-tree path with "prefixed in the source directory".
+    target_include_directories(${target} PUBLIC
+        $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>
+        $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
+
+    target_compile_options(${target} PRIVATE ${HPTT_PRIVATE_COMPILE_OPTIONS})
+    target_compile_definitions(${target} PUBLIC ${HPTT_PUBLIC_COMPILE_DEFINITIONS})
+
+    # OpenMP::OpenMP_CXX must be PUBLIC for the static archive: libhptt.a
+    # uses OpenMP internally, but the symbols stay unresolved until the
+    # consumer's final executable link. We propagate the requirement so
+    # the consumer's link line gets OpenMP automatically.
+    target_link_libraries(${target} PUBLIC OpenMP::OpenMP_CXX)
+endfunction()
+
+add_library(hptt_static STATIC ${HPTT_SRCS})
+hptt_configure_target(hptt_static)
+
+add_library(hptt_dyn SHARED ${HPTT_SRCS})
+hptt_configure_target(hptt_dyn)
+
+# Namespaced ALIAS targets. add_subdirectory() consumers can now use the
+# same `hptt::hptt_static` / `hptt::hptt_dyn` names that find_package(hptt)
+# consumers would, so swapping integration mechanisms doesn't require
+# rewriting target_link_libraries() calls.
+add_library(hptt::hptt_static ALIAS hptt_static)
+add_library(hptt::hptt_dyn ALIAS hptt_dyn)
+
+if(HPTT_INSTALL)
+    install(TARGETS hptt_static hptt_dyn
+            EXPORT hpttTargets
+            ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+            LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+            RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+
+    install(FILES ${HPTT_INCLUDES}
+            DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+
+    # Generate hpttTargets.cmake (defines `hptt::hptt_static` /
+    # `hptt::hptt_dyn` for find_package(hptt CONFIG) consumers).
+    install(EXPORT hpttTargets
+            FILE hpttTargets.cmake
+            NAMESPACE hptt::
+            DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/hptt)
+
+    # Generate hpttConfig.cmake — re-finds OpenMP (since the exported
+    # targets reference OpenMP::OpenMP_CXX in their INTERFACE_LINK_LIBRARIES,
+    # CMake would otherwise reject the import with "target not found") and
+    # pulls in hpttTargets.cmake.
+    set(hptt_config_in "${CMAKE_CURRENT_BINARY_DIR}/hpttConfig.cmake.in")
+    file(WRITE "${hptt_config_in}"
+"@PACKAGE_INIT@
+
+include(CMakeFindDependencyMacro)
+find_dependency(OpenMP REQUIRED)
+
+include(\"\${CMAKE_CURRENT_LIST_DIR}/hpttTargets.cmake\")
+
+check_required_components(hptt)
+")
+    configure_package_config_file("${hptt_config_in}"
+        "${CMAKE_CURRENT_BINARY_DIR}/hpttConfig.cmake"
+        INSTALL_DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/hptt)
+
+    write_basic_package_version_file(
+        "${CMAKE_CURRENT_BINARY_DIR}/hpttConfigVersion.cmake"
+        VERSION ${PROJECT_VERSION}
+        COMPATIBILITY SameMajorVersion)
+
+    install(FILES
+        "${CMAKE_CURRENT_BINARY_DIR}/hpttConfig.cmake"
+        "${CMAKE_CURRENT_BINARY_DIR}/hpttConfigVersion.cmake"
+        DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/hptt)
+endif()
