@@ -43,15 +43,18 @@ option(HPTT_INSTALL "Generate install rules for HPTT" ON)
 set(HPTT_PRIVATE_COMPILE_OPTIONS)
 set(HPTT_PUBLIC_COMPILE_DEFINITIONS)
 
+# Per-compiler architecture / optimization flags. OpenMP-specific flags
+# (`-fopenmp`, `-qopenmp`, `-qsmp=omp`, etc.) are intentionally *not* listed
+# here — `find_package(OpenMP)` + the PUBLIC `OpenMP::OpenMP_CXX` link below
+# provides them via the imported target's INTERFACE_COMPILE_OPTIONS, which
+# is per-toolchain-correct (AppleClang in particular often rejects a bare
+# `-fopenmp`).
 if(CMAKE_CXX_COMPILER_ID STREQUAL "Intel")
-    list(APPEND HPTT_PRIVATE_COMPILE_OPTIONS -qopenmp -xhost)
+    list(APPEND HPTT_PRIVATE_COMPILE_OPTIONS -xhost)
 elseif(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
-    if(ENABLE_IBM)
-        list(APPEND HPTT_PRIVATE_COMPILE_OPTIONS -fopenmp)
-    elseif(APPLE)
-        list(APPEND HPTT_PRIVATE_COMPILE_OPTIONS -fopenmp -mtune=native)
-    else()
-        list(APPEND HPTT_PRIVATE_COMPILE_OPTIONS -fopenmp)
+    if(APPLE)
+        list(APPEND HPTT_PRIVATE_COMPILE_OPTIONS -mtune=native)
+    elseif(NOT ENABLE_IBM)
         if(FINE_TUNE)
             list(APPEND HPTT_PRIVATE_COMPILE_OPTIONS -march=native -mtune=native)
         else()
@@ -60,14 +63,10 @@ elseif(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
     endif()
 elseif(CMAKE_CXX_COMPILER_ID STREQUAL "Clang" OR CMAKE_CXX_COMPILER_ID STREQUAL "AppleClang")
     if(FINE_TUNE)
-        list(APPEND HPTT_PRIVATE_COMPILE_OPTIONS -fopenmp -march=native)
-    else()
-        list(APPEND HPTT_PRIVATE_COMPILE_OPTIONS -fopenmp)
+        list(APPEND HPTT_PRIVATE_COMPILE_OPTIONS -march=native)
     endif()
 elseif(CMAKE_CXX_COMPILER_ID STREQUAL "PGI")
     list(APPEND HPTT_PRIVATE_COMPILE_OPTIONS -silent -w -Mnovect)
-elseif(CMAKE_CXX_COMPILER_ID STREQUAL "XL")
-    list(APPEND HPTT_PRIVATE_COMPILE_OPTIONS -qsmp=omp)
 endif()
 
 if(ENABLE_AVX)
@@ -109,7 +108,7 @@ find_package(OpenMP REQUIRED)
 
 # Configure both targets (static + shared) identically.
 function(hptt_configure_target target)
-    target_compile_features(${target} PUBLIC cxx_std_11)
+    target_compile_features(${target} PUBLIC cxx_std_17)
     set_target_properties(${target} PROPERTIES OUTPUT_NAME hptt)
 
     # Generator-expression-wrapped include dir: the source-tree path is
@@ -160,22 +159,13 @@ if(HPTT_INSTALL)
             NAMESPACE hptt::
             DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/hptt)
 
-    # Generate hpttConfig.cmake — re-finds OpenMP (since the exported
-    # targets reference OpenMP::OpenMP_CXX in their INTERFACE_LINK_LIBRARIES,
-    # CMake would otherwise reject the import with "target not found") and
-    # pulls in hpttTargets.cmake.
-    set(hptt_config_in "${CMAKE_CURRENT_BINARY_DIR}/hpttConfig.cmake.in")
-    file(WRITE "${hptt_config_in}"
-"@PACKAGE_INIT@
-
-include(CMakeFindDependencyMacro)
-find_dependency(OpenMP REQUIRED)
-
-include(\"\${CMAKE_CURRENT_LIST_DIR}/hpttTargets.cmake\")
-
-check_required_components(hptt)
-")
-    configure_package_config_file("${hptt_config_in}"
+    # Generate hpttConfig.cmake from the template in cmake/. The template
+    # re-finds OpenMP (since the exported targets reference
+    # OpenMP::OpenMP_CXX in their INTERFACE_LINK_LIBRARIES, CMake would
+    # otherwise reject the import with "target not found") and pulls in
+    # hpttTargets.cmake.
+    configure_package_config_file(
+        "${CMAKE_CURRENT_SOURCE_DIR}/cmake/hpttConfig.cmake.in"
         "${CMAKE_CURRENT_BINARY_DIR}/hpttConfig.cmake"
         INSTALL_DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/hptt)
 

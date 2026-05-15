@@ -1,0 +1,14 @@
+@PACKAGE_INIT@
+
+include(CMakeFindDependencyMacro)
+
+# hptt_static and hptt_dyn both `target_link_libraries(... PUBLIC
+# OpenMP::OpenMP_CXX)`, so consumers calling `find_package(hptt CONFIG)`
+# need OpenMP::OpenMP_CXX recreated in their scope before the imported
+# targets reference it. Without this find_dependency call CMake errors
+# out with "target OpenMP::OpenMP_CXX not found".
+find_dependency(OpenMP REQUIRED)
+
+include("${CMAKE_CURRENT_LIST_DIR}/hpttTargets.cmake")
+
+check_required_components(hptt)
