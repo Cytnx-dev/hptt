@@ -133,6 +133,26 @@ hptt_configure_target(hptt_dyn)
 add_library(hptt::hptt_static ALIAS hptt_static)
 add_library(hptt::hptt_dyn ALIAS hptt_dyn)
 
+# Generate hpttConfig.cmake into the build dir unconditionally so the
+# build-tree export below works even when HPTT_INSTALL=OFF.  Parent
+# projects that use add_subdirectory(hptt) with HPTT_INSTALL=OFF still
+# need hptt_static to appear in *some* CMake export set: CMake requires
+# every target referenced by an exported target's link interface to be
+# exported somewhere, or the parent's own export(EXPORT ...) call errors
+# out with "target hptt_static is not in any export set".
+configure_package_config_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/cmake/hpttConfig.cmake.in"
+    "${CMAKE_CURRENT_BINARY_DIR}/hpttConfig.cmake"
+    INSTALL_DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/hptt)
+
+# Build-tree export: write hpttTargets.cmake next to hpttConfig.cmake in
+# the binary dir.  Uses export(TARGETS ...) rather than export(EXPORT
+# hpttTargets) so it works without install rules (i.e. when
+# HPTT_INSTALL=OFF).
+export(TARGETS hptt_static hptt_dyn
+       FILE "${CMAKE_CURRENT_BINARY_DIR}/hpttTargets.cmake"
+       NAMESPACE hptt::)
+
 if(HPTT_INSTALL)
     install(TARGETS hptt_static hptt_dyn
             EXPORT hpttTargets
@@ -149,16 +169,6 @@ if(HPTT_INSTALL)
             NAMESPACE hptt::
             DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/hptt)
 
-    # Generate hpttConfig.cmake from the template in cmake/. The template
-    # re-finds OpenMP (since the exported targets reference
-    # OpenMP::OpenMP_CXX in their INTERFACE_LINK_LIBRARIES, CMake would
-    # otherwise reject the import with "target not found") and pulls in
-    # hpttTargets.cmake.
-    configure_package_config_file(
-        "${CMAKE_CURRENT_SOURCE_DIR}/cmake/hpttConfig.cmake.in"
-        "${CMAKE_CURRENT_BINARY_DIR}/hpttConfig.cmake"
-        INSTALL_DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/hptt)
-
     # Note: no hpttConfigVersion.cmake is shipped because HPTT does not
     # carry a declared version (no git tags, no version file). Consumers
     # calling `find_package(hptt CONFIG)` without a version request work;
@@ -166,4 +176,10 @@ if(HPTT_INSTALL)
     install(FILES
         "${CMAKE_CURRENT_BINARY_DIR}/hpttConfig.cmake"
         DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/hptt)
+
+    # Register in CMake's user package registry so find_package(hptt CONFIG)
+    # can locate this build tree without an install step.  Skipped when
+    # HPTT_INSTALL=OFF (subdirectory / CI use) to avoid writing to
+    # ~/.cmake/packages on CI machines.
+    export(PACKAGE hptt)
 endif()
