@@ -21,6 +21,12 @@ option(FINE_TUNE "Fine-tune for the host CPU (uses -march=native; produces non-p
 # its headers from its own install layout).
 option(HPTT_INSTALL "Generate install rules for HPTT" ON)
 
+# HPTT_BUILD_SHARED: ON by default so standalone builds keep producing
+# libhptt.so / libhptt.dylib / hptt.dll. Parent projects that only ever
+# link the static archive can set it OFF to halve build time and to skip
+# the shared library entirely.
+option(HPTT_BUILD_SHARED "Build the shared HPTT library (hptt_dyn)" ON)
+
 # -----------------------------------------------------------------------------
 # Build flags split by *visibility* to consumers.
 #
@@ -132,15 +138,22 @@ endfunction()
 add_library(hptt_static STATIC ${HPTT_SRCS})
 hptt_configure_target(hptt_static)
 
-add_library(hptt_dyn SHARED ${HPTT_SRCS})
-hptt_configure_target(hptt_dyn)
-
 # Namespaced ALIAS targets. add_subdirectory() consumers can now use the
 # same `hptt::hptt_static` / `hptt::hptt_dyn` names that find_package(hptt)
 # consumers would, so swapping integration mechanisms doesn't require
 # rewriting target_link_libraries() calls.
 add_library(hptt::hptt_static ALIAS hptt_static)
-add_library(hptt::hptt_dyn ALIAS hptt_dyn)
+
+# Both the export() and install(TARGETS) calls below iterate this list so
+# hptt_dyn drops out of them cleanly when HPTT_BUILD_SHARED=OFF.
+set(HPTT_TARGETS hptt_static)
+
+if(HPTT_BUILD_SHARED)
+    add_library(hptt_dyn SHARED ${HPTT_SRCS})
+    hptt_configure_target(hptt_dyn)
+    add_library(hptt::hptt_dyn ALIAS hptt_dyn)
+    list(APPEND HPTT_TARGETS hptt_dyn)
+endif()
 
 # Generate hpttConfig.cmake into the build dir unconditionally so the
 # build-tree export below works even when HPTT_INSTALL=OFF.  Parent
@@ -158,12 +171,12 @@ configure_package_config_file(
 # the binary dir.  Uses export(TARGETS ...) rather than export(EXPORT
 # hpttTargets) so it works without install rules (i.e. when
 # HPTT_INSTALL=OFF).
-export(TARGETS hptt_static hptt_dyn
+export(TARGETS ${HPTT_TARGETS}
        FILE "${CMAKE_CURRENT_BINARY_DIR}/hpttTargets.cmake"
        NAMESPACE hptt::)
 
 if(HPTT_INSTALL)
-    install(TARGETS hptt_static hptt_dyn
+    install(TARGETS ${HPTT_TARGETS}
             EXPORT hpttTargets
             ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
             LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
