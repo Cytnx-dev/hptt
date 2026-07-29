@@ -69,10 +69,19 @@ elseif(CMAKE_CXX_COMPILER_ID STREQUAL "PGI")
 endif()
 
 if(ENABLE_AVX)
-    list(APPEND HPTT_PRIVATE_COMPILE_OPTIONS -mavx)
+    if(MSVC)
+        list(APPEND HPTT_PRIVATE_COMPILE_OPTIONS /arch:AVX)
+    else()
+        list(APPEND HPTT_PRIVATE_COMPILE_OPTIONS -mavx)
+    endif()
     list(APPEND HPTT_PUBLIC_COMPILE_DEFINITIONS HPTT_ARCH_AVX)
 elseif(ENABLE_ARM)
-    list(APPEND HPTT_PRIVATE_COMPILE_OPTIONS -mfpu=neon)
+    # MSVC targeting ARM64 needs no opt-in flag: Advanced SIMD (Neon) is
+    # part of the baseline ISA there, and cl's /arch: only selects newer
+    # extensions.
+    if(NOT MSVC)
+        list(APPEND HPTT_PRIVATE_COMPILE_OPTIONS -mfpu=neon)
+    endif()
     list(APPEND HPTT_PUBLIC_COMPILE_DEFINITIONS HPTT_ARCH_ARM)
 elseif(ENABLE_IBM)
     list(APPEND HPTT_PRIVATE_COMPILE_OPTIONS -mtune=native -maltivec -mabi=altivec)
