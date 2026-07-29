@@ -86,10 +86,12 @@ if(ENABLE_AVX)
     endif()
     list(APPEND HPTT_PUBLIC_COMPILE_DEFINITIONS HPTT_ARCH_AVX)
 elseif(ENABLE_ARM)
-    # MSVC targeting ARM64 needs no opt-in flag: Advanced SIMD (Neon) is
-    # part of the baseline ISA there, and cl's /arch: only selects newer
-    # extensions.
-    if(NOT MSVC)
+    # -mfpu=neon is a 32-bit ARM flag. On a 64-bit ARM target Advanced SIMD
+    # (Neon) is part of the baseline ISA, so there is nothing to switch on
+    # and no -mfpu option to switch it with: GCC on aarch64 rejects the
+    # flag outright, and cl's /arch: only selects newer architecture
+    # levels. Only 32-bit ARM needs the opt-in.
+    if(NOT MSVC AND NOT CMAKE_SYSTEM_PROCESSOR MATCHES "(aarch64|arm64|ARM64)")
         list(APPEND HPTT_PRIVATE_COMPILE_OPTIONS -mfpu=neon)
     endif()
     list(APPEND HPTT_PUBLIC_COMPILE_DEFINITIONS HPTT_ARCH_ARM)
