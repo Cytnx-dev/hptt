@@ -154,9 +154,15 @@ jobs:
       # package resolvable before anything is installed; hptt_DIR points
       # find_package straight at the build directory.
       - name: Consumer against the BUILD TREE
+        # OpenMP_ROOT is needed here as well as when building HPTT:
+        # hpttConfig.cmake re-runs find_dependency(OpenMP) in the
+        # consumer's scope, because OpenMP::OpenMP_CXX is a PUBLIC link
+        # dependency of the hptt targets. On AppleClang that resolves only
+        # with a pointer at the brew libomp.
         run: |
           EXTRA=()
           [ "$RUNNER_OS" = "Windows" ] && EXTRA+=(-DCMAKE_CXX_COMPILER=cl)
+          [ "$RUNNER_OS" = "macOS" ] && EXTRA+=("-DOpenMP_ROOT=$(brew --prefix libomp)")
           cmake -S "$CONSUMER_SRC_DIR" -B "${{ github.workspace }}/consumer-build-tree" \
             -G Ninja -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
@@ -180,6 +186,7 @@ jobs:
         run: |
           EXTRA=()
           [ "$RUNNER_OS" = "Windows" ] && EXTRA+=(-DCMAKE_CXX_COMPILER=cl)
+          [ "$RUNNER_OS" = "macOS" ] && EXTRA+=("-DOpenMP_ROOT=$(brew --prefix libomp)")
           cmake -S "$CONSUMER_SRC_DIR" -B "${{ github.workspace }}/consumer-install-tree" \
             -G Ninja -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
