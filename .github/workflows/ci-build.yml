@@ -1,0 +1,226 @@
+name: Build
+
+# Builds HPTT on Linux, macOS and Windows, on both x86-64 and ARM64, and
+# then consumes it from a separate project through
+# `find_package(hptt CONFIG)` -- once against the build tree and once
+# against an install prefix. The consumer transposes random tensors and
+# compares against a naive reference, so a green job means the exported
+# package links *and* the library computes correct results on that
+# platform.
+
+on:
+  # No `branches:` filter: a pull request targeting any branch is built,
+  # which is what makes stacked PRs (one PR based on another's branch)
+  # get checked too.
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  # One group per PR, so pushing a new commit cancels the runs still
+  # queued or in flight for the previous one. Pushes to main are keyed by
+  # run_id instead and never cancel each other -- every merged commit
+  # keeps its own result.
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      # One platform failing should not hide the results of the others.
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-x64
+            runner: ubuntu-latest
+          - name: linux-arm64
+            runner: ubuntu-24.04-arm
+          - name: macos-x64
+            runner: macos-15-intel
+          - name: macos-arm64
+            runner: macos-latest
+          - name: windows-x64
+            runner: windows-latest
+            msvc_arch: x64
+          - name: windows-arm64
+            runner: windows-11-arm
+            msvc_arch: arm64
+
+    defaults:
+      run:
+        # bash everywhere, including Windows, so one set of steps covers
+        # all six jobs. -e / -o pipefail restore the fail-fast behaviour
+        # that overriding `shell:` would otherwise drop.
+        shell: bash -eo pipefail {0}
+
+    env:
+      BUILD_DIR: ${{ github.workspace }}/build
+      INSTALL_DIR: ${{ github.workspace }}/install
+      CONSUMER_SRC_DIR: ${{ github.workspace }}/tests/downstream_find_package
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # Re-running a PR job reuses the merge commit built when the run was
+      # first created, not a fresh merge with the current target branch.
+      # Merging here keeps the job honest about the branch as it stands now.
+      # A committer identity is required because a non-fast-forward merge
+      # creates a merge commit.
+      - name: Merge with latest target branch (pull_request only)
+        if: github.event_name == 'pull_request'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git fetch origin ${{ github.event.pull_request.base.ref }}
+          git merge --no-edit origin/${{ github.event.pull_request.base.ref }}
+
+      # AppleClang ships no OpenMP runtime, so find_package(OpenMP REQUIRED)
+      # fails on macOS without libomp. OpenMP_ROOT is passed at configure
+      # time below.
+      - name: Install libomp (macOS)
+        if: runner.os == 'macOS'
+        run: brew install libomp
+
+      # The runner images do not all ship Ninja, and the ones that do are
+      # not consistent about it across architectures.
+      - name: Install Ninja
+        run: |
+          if command -v ninja >/dev/null 2>&1; then
+            ninja --version
+            exit 0
+          fi
+          case "$RUNNER_OS" in
+            Linux)   sudo apt-get update && sudo apt-get install -y ninja-build ;;
+            macOS)   brew install ninja ;;
+            Windows) choco install ninja -y --no-progress ;;
+          esac
+          ninja --version
+
+      # Puts cl.exe, the Windows SDK headers and the import libraries on
+      # PATH/INCLUDE/LIB. The Ninja generator, unlike the Visual Studio
+      # one, does not locate the toolchain by itself. Ninja itself is
+      # preinstalled on the Windows runner images.
+      - name: Set up MSVC (Windows)
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: ${{ matrix.msvc_arch }}
+
+      # Installs ccache for the current OS and restores/saves its cache.
+      # The key is per matrix job so the six platforms never share objects.
+      - name: ccache
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: ${{ matrix.name }}
+          max-size: 500M
+
+      - name: Configure HPTT
+        # ccache is wired in through CMake's compiler-launcher hook rather
+        # than by shadowing the compiler on PATH, which keeps working with
+        # the absolute compiler paths CMake records.
+        #
+        # CMP0141 + MSVC_DEBUG_INFORMATION_FORMAT=Embedded put debug info
+        # in the object files (/Z7). ccache cannot cache compilations that
+        # write to a shared .pdb, so without this every Windows compile is
+        # a cache miss.
+        run: |
+          EXTRA=()
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            EXTRA+=("-DOpenMP_ROOT=$(brew --prefix libomp)")
+          fi
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            EXTRA+=(-DCMAKE_C_COMPILER=cl -DCMAKE_CXX_COMPILER=cl)
+            EXTRA+=(-DCMAKE_POLICY_DEFAULT_CMP0141=NEW)
+            EXTRA+=(-DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded)
+          fi
+          cmake -S . -B "$BUILD_DIR" -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX="$INSTALL_DIR" \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            "${EXTRA[@]}"
+
+      - name: Build HPTT
+        run: cmake --build "$BUILD_DIR"
+
+      # --- Downstream consumer: build tree ------------------------------
+      # export(TARGETS ...) plus the build-dir hpttConfig.cmake make the
+      # package resolvable before anything is installed; hptt_DIR points
+      # find_package straight at the build directory.
+      - name: Consumer against the BUILD TREE
+        run: |
+          EXTRA=()
+          [ "$RUNNER_OS" = "Windows" ] && EXTRA+=(-DCMAKE_CXX_COMPILER=cl)
+          cmake -S "$CONSUMER_SRC_DIR" -B "${{ github.workspace }}/consumer-build-tree" \
+            -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            -Dhptt_DIR="$BUILD_DIR" "${EXTRA[@]}"
+          cmake --build "${{ github.workspace }}/consumer-build-tree"
+
+      - name: Run BUILD TREE consumer
+        run: |
+          cd "${{ github.workspace }}/consumer-build-tree"
+          ./consumer
+          ./consumer_dyn
+
+      # --- Downstream consumer: install tree ----------------------------
+      - name: Install HPTT
+        run: cmake --install "$BUILD_DIR"
+
+      - name: Consumer against the INSTALL TREE
+        # A fresh build directory resolving the package from the install
+        # prefix through CMAKE_PREFIX_PATH, the way a real downstream user
+        # would find an installed HPTT.
+        run: |
+          EXTRA=()
+          [ "$RUNNER_OS" = "Windows" ] && EXTRA+=(-DCMAKE_CXX_COMPILER=cl)
+          cmake -S "$CONSUMER_SRC_DIR" -B "${{ github.workspace }}/consumer-install-tree" \
+            -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_PREFIX_PATH="$INSTALL_DIR" "${EXTRA[@]}"
+          cmake --build "${{ github.workspace }}/consumer-install-tree"
+
+      - name: Run INSTALL TREE consumer
+        run: |
+          cd "${{ github.workspace }}/consumer-install-tree"
+          ./consumer
+          ./consumer_dyn
+
+      # Guards the artifact-naming rule the Windows build depends on: the
+      # static library and the DLL's import library must never claim the
+      # same path. The Ninja generator only rejects the collision when both
+      # targets are enabled, which is the configuration built above.
+      - name: Check Windows artifact names are distinct
+        if: runner.os == 'Windows'
+        run: |
+          test -f "$INSTALL_DIR/lib/hptt.lib"
+          test -f "$INSTALL_DIR/lib/hptt_dyn.lib"
+          test -f "$INSTALL_DIR/bin/hptt.dll"
+
+      # HPTT_BUILD_SHARED=OFF has to keep configuring, building and
+      # exporting on its own -- it is how a parent project that links only
+      # the static archive embeds HPTT.
+      - name: Build with HPTT_BUILD_SHARED=OFF
+        run: |
+          EXTRA=()
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            EXTRA+=("-DOpenMP_ROOT=$(brew --prefix libomp)")
+          fi
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            EXTRA+=(-DCMAKE_C_COMPILER=cl -DCMAKE_CXX_COMPILER=cl)
+            EXTRA+=(-DCMAKE_POLICY_DEFAULT_CMP0141=NEW)
+            EXTRA+=(-DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded)
+          fi
+          cmake -S . -B "${{ github.workspace }}/build-static-only" -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DHPTT_BUILD_SHARED=OFF \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            "${EXTRA[@]}"
+          cmake --build "${{ github.workspace }}/build-static-only"
