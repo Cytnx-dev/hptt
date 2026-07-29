@@ -158,6 +158,15 @@ if(HPTT_BUILD_SHARED)
     # would export nothing and the linker would emit no import library at
     # all -- leaving install(TARGETS ... ARCHIVE) with nothing to install.
     set_target_properties(hptt_dyn PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON)
+
+    # On Windows both the static library and the DLL's import library are
+    # ARCHIVE artifacts named <OUTPUT_NAME>.lib, so the shared OUTPUT_NAME
+    # of `hptt` makes the two targets claim the same path and Ninja aborts
+    # with "multiple rules generate hptt.lib". Renaming just the import
+    # library keeps the DLL itself hptt.dll and the static archive
+    # hptt.lib. ARCHIVE_OUTPUT_NAME is ignored on ELF/Mach-O platforms, so
+    # libhptt.a / libhptt.so / libhptt.dylib are unaffected.
+    set_target_properties(hptt_dyn PROPERTIES ARCHIVE_OUTPUT_NAME hptt_dyn)
 endif()
 
 # Generate hpttConfig.cmake into the build dir unconditionally so the
