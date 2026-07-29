@@ -27,6 +27,20 @@ option(HPTT_INSTALL "Generate install rules for HPTT" ON)
 # the shared library entirely.
 option(HPTT_BUILD_SHARED "Build the shared HPTT library (hptt_dyn)" ON)
 
+# HPTT_EXPORT_SET: the install(EXPORT) set HPTT's targets are added to.
+#
+# CMake refuses to generate an export whose link interface names a target
+# that is not itself installed and exported, with "target hptt_static is
+# not in any export set". So a parent project that embeds HPTT via
+# add_subdirectory(), links hptt_static into a target of its own, and then
+# exports that target cannot leave HPTT out of its export set.
+#
+# Pointing this at the parent's set makes HPTT's targets part of the
+# parent's package -- consumers reach them as `Parent::hptt_static` after
+# find_package(Parent), with no separate find_package(hptt).
+set(HPTT_EXPORT_SET "hpttTargets" CACHE STRING
+    "install(EXPORT) set that HPTT's targets are added to")
+
 # -----------------------------------------------------------------------------
 # Build flags split by *visibility* to consumers.
 #
@@ -191,27 +205,35 @@ export(TARGETS ${HPTT_TARGETS}
 
 if(HPTT_INSTALL)
     install(TARGETS ${HPTT_TARGETS}
-            EXPORT hpttTargets
+            EXPORT ${HPTT_EXPORT_SET}
             ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
             LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
             RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 
     install(DIRECTORY include/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
 
-    # Generate hpttTargets.cmake (defines `hptt::hptt_static` /
-    # `hptt::hptt_dyn` for find_package(hptt CONFIG) consumers).
-    install(EXPORT hpttTargets
-            FILE hpttTargets.cmake
-            NAMESPACE hptt::
-            DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/hptt)
+    # hpttTargets.cmake and hpttConfig.cmake describe a standalone hptt
+    # package, so they are emitted only when HPTT owns its export set.
+    # Once HPTT_EXPORT_SET names a parent project's set, the parent
+    # installs those targets as part of its own package, and generating a
+    # second package here would ship an hpttTargets.cmake that re-declares
+    # targets the parent already exports.
+    if(HPTT_EXPORT_SET STREQUAL "hpttTargets")
+        # Generate hpttTargets.cmake (defines `hptt::hptt_static` /
+        # `hptt::hptt_dyn` for find_package(hptt CONFIG) consumers).
+        install(EXPORT hpttTargets
+                FILE hpttTargets.cmake
+                NAMESPACE hptt::
+                DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/hptt)
 
-    # Note: no hpttConfigVersion.cmake is shipped because HPTT does not
-    # carry a declared version (no git tags, no version file). Consumers
-    # calling `find_package(hptt CONFIG)` without a version request work;
-    # `find_package(hptt 1.0 CONFIG)` would fail at the version check.
-    install(FILES
-        "${CMAKE_CURRENT_BINARY_DIR}/hpttConfig.cmake"
-        DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/hptt)
+        # Note: no hpttConfigVersion.cmake is shipped because HPTT does not
+        # carry a declared version (no git tags, no version file). Consumers
+        # calling `find_package(hptt CONFIG)` without a version request work;
+        # `find_package(hptt 1.0 CONFIG)` would fail at the version check.
+        install(FILES
+            "${CMAKE_CURRENT_BINARY_DIR}/hpttConfig.cmake"
+            DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/hptt)
+    endif()
 
     # Register in CMake's user package registry so find_package(hptt CONFIG)
     # can locate this build tree without an install step.  Skipped when
