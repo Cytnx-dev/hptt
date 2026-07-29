@@ -62,7 +62,11 @@ elseif(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
     elseif(NOT ENABLE_IBM)
         if(FINE_TUNE)
             list(APPEND HPTT_PRIVATE_COMPILE_OPTIONS -march=native -mtune=native)
-        else()
+        elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64|amd64|i[3-6]86)$")
+            # `x86-64` is the baseline x86 -march value. It is not a valid
+            # -march anywhere else -- on aarch64 GCC rejects it outright
+            # with "unknown value 'x86-64' for '-march'" -- so other
+            # architectures take the compiler's own default.
             list(APPEND HPTT_PRIVATE_COMPILE_OPTIONS -march=x86-64 -mtune=generic)
         endif()
     endif()
