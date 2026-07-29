@@ -153,6 +153,11 @@ if(HPTT_BUILD_SHARED)
     hptt_configure_target(hptt_dyn)
     add_library(hptt::hptt_dyn ALIAS hptt_dyn)
     list(APPEND HPTT_TARGETS hptt_dyn)
+
+    # No symbol in HPTT carries __declspec(dllexport), so on Windows the DLL
+    # would export nothing and the linker would emit no import library at
+    # all -- leaving install(TARGETS ... ARCHIVE) with nothing to install.
+    set_target_properties(hptt_dyn PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON)
 endif()
 
 # Generate hpttConfig.cmake into the build dir unconditionally so the
