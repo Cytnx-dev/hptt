@@ -752,12 +752,15 @@ void transpose_int_constStride1( const floatType* HPTT_RESTRICT A, floatType* HP
 #ifdef _OPENMP
          omp_init_lock(&writelock);
 #endif
-         int tmpPerm[dim];
-         int tmpSizeA[dim];
-         int tmpOuterSizeA[dim];
-         int tmpOuterSizeB[dim];
-         accountForRowMajor(sizeA, outerSizeA, outerSizeB, perm, 
-               tmpSizeA, tmpOuterSizeA, tmpOuterSizeB, tmpPerm, dim, useRowMajor); 
+         // dim is a runtime value, and variable-length arrays are a GNU
+         // extension that MSVC rejects (C2131).
+         std::vector<int> tmpPerm(dim);
+         std::vector<int> tmpSizeA(dim);
+         std::vector<int> tmpOuterSizeA(dim);
+         std::vector<int> tmpOuterSizeB(dim);
+         accountForRowMajor(sizeA, outerSizeA, outerSizeB, perm,
+               tmpSizeA.data(), tmpOuterSizeA.data(), tmpOuterSizeB.data(),
+               tmpPerm.data(), dim, useRowMajor);
 
          sizeA_.resize(dim);
          perm_.resize(dim);
@@ -775,10 +778,10 @@ void transpose_int_constStride1( const floatType* HPTT_RESTRICT A, floatType* HP
                threadIds_.push_back(i);
          }
 
-         verifyParameter(tmpSizeA, tmpPerm, tmpOuterSizeA, tmpOuterSizeB, dim);
+         verifyParameter(tmpSizeA.data(), tmpPerm.data(), tmpOuterSizeA.data(), tmpOuterSizeB.data(), dim);
 
-         // initializes dim_, outerSizeA, outerSizeB, sizeA and perm 
-         skipIndices(tmpSizeA, tmpPerm, tmpOuterSizeA, tmpOuterSizeB, dim);
+         // initializes dim_, outerSizeA, outerSizeB, sizeA and perm
+         skipIndices(tmpSizeA.data(), tmpPerm.data(), tmpOuterSizeA.data(), tmpOuterSizeB.data(), dim);
          fuseIndices();
 
          // initializes lda_ and ldb_
@@ -1726,7 +1729,9 @@ void Transpose<floatType>::getBestLoopOrder( std::vector<int> &loopOrder ) const
    }
 
    // create cost matrix; cost[i,idx] === cost for idx being at loop-level i
-   double costs[dim_*dim_];
+   // dim_ is a runtime value, and variable-length arrays are a GNU
+   // extension that MSVC rejects (C2131).
+   std::vector<double> costs(dim_*dim_);
    for(int i=0;i < dim_ ; ++i){
       for(int idx=0;idx < dim_ ; ++idx){ //idx is at loop i
          double cost = 0;
