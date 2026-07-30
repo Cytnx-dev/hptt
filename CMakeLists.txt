@@ -11,9 +11,28 @@ include(CheckCXXCompilerFlag)
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
 
+# Target-architecture predicates, decided once. Between them they set the
+# ENABLE_ARM default just below, the baseline -march further down, and the
+# order the host-tuning candidates are probed in.
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64|amd64|i[3-6]86)$")
+    set(HPTT_TARGET_IS_X86 TRUE)
+else()
+    set(HPTT_TARGET_IS_X86 FALSE)
+endif()
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "(aarch64|arm64|ARM64)")
+    set(HPTT_TARGET_IS_ARM64 TRUE)
+else()
+    set(HPTT_TARGET_IS_ARM64 FALSE)
+endif()
+
 option(ENABLE_IBM "Enable IBM POWER architecture support" OFF)
 option(ENABLE_AVX "Enable x86 AVX (REGISTER_BITS=256) support" OFF)
-option(ENABLE_ARM "Enable ARM/Neon (REGISTER_BITS=128) support" OFF)
+# Advanced SIMD is mandatory in every ARMv8-A implementation, so selecting the
+# Neon micro-kernels on a 64-bit ARM target excludes no CPU that can run the
+# library at all -- which makes ON the right default there even for a
+# redistributed binary. 32-bit ARM keeps it opt-in: Neon is an optional
+# extension on those targets, which is also why `-mfpu=neon` exists only there.
+option(ENABLE_ARM "Enable ARM/Neon (REGISTER_BITS=128) support" ${HPTT_TARGET_IS_ARM64})
 option(FINE_TUNE "Fine-tune for the CPU running the build (produces non-portable binaries)" OFF)
 
 # HPTT_INSTALL: ON by default for standalone builds, but a parent project
@@ -48,14 +67,6 @@ option(HPTT_BUILD_SHARED "Build the shared HPTT library (hptt_dyn)" ON)
 # -----------------------------------------------------------------------------
 set(HPTT_PRIVATE_COMPILE_OPTIONS)
 set(HPTT_PUBLIC_COMPILE_DEFINITIONS)
-
-# Decided once: the same predicate picks the baseline -march below and the
-# order in which the host-tuning candidates are probed.
-if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64|amd64|i[3-6]86)$")
-    set(HPTT_TARGET_IS_X86 TRUE)
-else()
-    set(HPTT_TARGET_IS_X86 FALSE)
-endif()
 
 # Per-compiler baseline flags, applied whether or not FINE_TUNE is on.
 # OpenMP-specific flags (`-fopenmp`, `-qopenmp`, `-qsmp=omp`, etc.) are
@@ -153,8 +164,7 @@ elseif(ENABLE_ARM)
     # target has Advanced SIMD in its baseline ISA with no `-mfpu` to
     # select it (GCC on aarch64 errors with "unknown value 'neon'").
     # HPTT_ARCH_ARM below is what actually selects the Neon kernels.
-    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang"
-       AND NOT CMAKE_SYSTEM_PROCESSOR MATCHES "(aarch64|arm64|ARM64)")
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang" AND NOT HPTT_TARGET_IS_ARM64)
         list(APPEND HPTT_PRIVATE_COMPILE_OPTIONS -mfpu=neon)
     endif()
     list(APPEND HPTT_PUBLIC_COMPILE_DEFINITIONS HPTT_ARCH_ARM)
