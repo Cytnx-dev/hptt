@@ -162,6 +162,21 @@ jobs:
       - name: Build HPTT
         run: cmake --build "$BUILD_DIR"
 
+      # HPTT ships as a binary, so the default configuration must carry
+      # nothing specific to the machine that built it: a `native`-tuned
+      # artifact can fault on a different CPU of the same architecture.
+      # FINE_TUNE=ON is the documented way to opt into that, and this asserts
+      # it is the only way to arrive there. Unlike the FINE_TUNE=ON check
+      # further down, this one runs on every platform -- MSVC has no
+      # host-tuning flag, so "none present" is the expected answer there too.
+      - name: Check the default build is host-independent
+        run: |
+          if grep -Eo -- '-(march|mcpu|mtune)=native|-xhost' \
+             "$BUILD_DIR/compile_commands.json" | sort -u; then
+            echo "the host-tuning flag(s) above leaked into a FINE_TUNE=OFF build" >&2
+            exit 1
+          fi
+
       # --- Downstream consumer: build tree ------------------------------
       # export(TARGETS ...) plus the build-dir hpttConfig.cmake make the
       # package resolvable before anything is installed; hptt_DIR points
