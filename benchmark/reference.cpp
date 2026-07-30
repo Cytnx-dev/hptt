@@ -14,8 +14,18 @@
 #include "defines.h"
 
 
+// Conjugation that stays inside the element type. Since C++11 std::conj on a
+// real argument is the overload returning std::complex<T>, and complex<T> does
+// not convert back to T, so `alpha * std::conj(a)` fails to compile for
+// floatType=float and floatType=double. Conjugation is the identity on reals.
+template<typename T>
+static inline T conj_ref(const T &a) { return a; }
+template<typename T>
+static inline std::complex<T> conj_ref(const std::complex<T> &a) { return std::conj(a); }
+
+
 template<typename floatType>
-void transpose_ref( uint32_t *size, uint32_t *perm, int dim, 
+void transpose_ref( uint32_t *size, uint32_t *perm, int dim,
       const floatType* __restrict__ A, floatType alpha, 
       floatType* __restrict__ B, floatType beta, const bool conjA)
 {
@@ -57,13 +67,13 @@ void transpose_ref( uint32_t *size, uint32_t *perm, int dim,
       if( beta == (floatType) 0 )
          for(int i=0; i < sizeInner; ++i)
             if( conjA )
-               B_[i] = alpha * std::conj(A_[i * strideAinner]);
+               B_[i] = alpha * conj_ref(A_[i * strideAinner]);
             else
                B_[i] = alpha * A_[i * strideAinner];
       else
          for(int i=0; i < sizeInner; ++i)
             if( conjA )
-               B_[i] = alpha * std::conj(A_[i * strideAinner]) + beta * B_[i];
+               B_[i] = alpha * conj_ref(A_[i * strideAinner]) + beta * B_[i];
             else
                B_[i] = alpha * A_[i * strideAinner] + beta * B_[i];
    }
