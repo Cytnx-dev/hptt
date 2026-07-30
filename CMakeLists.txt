@@ -11,9 +11,11 @@ include(CheckCXXCompilerFlag)
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
 
-# Target-architecture predicates, decided once. Between them they set the
-# ENABLE_AVX / ENABLE_ARM defaults just below, reject those options on a target
-# that cannot honour them, and choose the baseline -march further down.
+# Target-architecture predicates, decided once. They reject an ISA option the
+# target cannot honour (just below) and pick the baseline -march further down.
+# What they deliberately do not do is turn an option on: every ISA option
+# defaults OFF on every platform, so the architecture only ever vetoes a
+# request, never makes one.
 #
 # What they must describe is the *target*, which CMAKE_SYSTEM_PROCESSOR does
 # not always name. CMake derives that variable from the compiler only for
@@ -50,29 +52,67 @@ else()
     set(HPTT_TARGET_IS_POWER FALSE)
 endif()
 
-option(ENABLE_IBM "Enable IBM POWER/AltiVec support (POWER targets only)" OFF)
-
-# ENABLE_AVX raises the x86 floor to x86-64-v3 (AVX, AVX2, FMA). Apple is the
-# one platform where that is the right default: the oldest Intel Mac any
-# supported macOS release runs on is a 2013 Haswell machine, so every Mac that
-# can execute the library already satisfies v3. Elsewhere on x86 the option
-# stays opt-in, because a generic x86-64 binary must still run on pre-2013
-# Intel and pre-Zen AMD parts.
-if(APPLE AND HPTT_TARGET_IS_X86)
-    set(hptt_enable_avx_default ON)
-else()
-    set(hptt_enable_avx_default OFF)
-endif()
-option(ENABLE_AVX "Enable x86 AVX kernels, assuming an x86-64-v3 target" ${hptt_enable_avx_default})
-
-# Advanced SIMD is mandatory in every ARMv8-A implementation, so selecting the
-# Neon micro-kernels on a 64-bit ARM target excludes no CPU that can run the
-# library at all -- which makes ON the right default there even for a
-# redistributed binary. The option assumes an ARMv8-A/arm64 target and is
-# rejected on anything else, 32-bit ARM included.
-option(ENABLE_ARM "Enable ARM/Neon kernels, assuming an ARMv8-A arm64 target" ${HPTT_TARGET_IS_ARM64})
-
+# Every one of these defaults OFF, on every platform. A default build is the
+# portable one, and each step away from portability is named explicitly by
+# whoever runs the build -- which is how README.md documents them ("Optionally
+# one of ...") and how the Makefile targets they come from behave: `make avx`,
+# `make arm` and `make ibm` each opt in to one kernel family, and nothing is
+# selected without being asked for.
+#
+# Each ISA option states an assumption about the target rather than probing for
+# one, and is refused below on a target that cannot satisfy it:
+#
+#   ENABLE_AVX  x86-64-v3: AVX, AVX2 and FMA.
+#   ENABLE_ARM  ARMv8-A/arm64, where Advanced SIMD is mandatory. 32-bit ARM
+#               does not qualify -- Neon is optional there.
+#   ENABLE_IBM  POWER with AltiVec.
+#
+# The three are mutually exclusive in effect: they name different
+# architectures and the predicates above are mutually exclusive, so on any one
+# target at most one of them survives validation.
+option(ENABLE_AVX "Enable x86 AVX kernels, assuming an x86-64-v3 target" OFF)
+option(ENABLE_ARM "Enable ARM/Neon kernels, assuming an ARMv8-A arm64 target" OFF)
+option(ENABLE_IBM "Enable IBM POWER/AltiVec kernels, assuming a POWER target" OFF)
 option(FINE_TUNE "Fine-tune for the CPU running the build (produces non-portable binaries)" OFF)
+
+# -----------------------------------------------------------------------------
+# Validation -- the one place the target architecture has any say in these
+# options. An option the target cannot honour is refused here, at configure
+# time, instead of putting flags and intrinsics on the compile line for the
+# compiler to reject much later: ENABLE_ARM on x86 defines HPTT_ARCH_ARM, and
+# the Neon intrinsics that macro selects in src/transpose.cpp fail deep in the
+# build with an error naming an intrinsic rather than the option that asked for
+# it.
+#
+# All three checks are independent and all three run, because the selection
+# chain further down is if/elseif: a check placed inside one of its branches
+# would never run once an earlier option had already matched, so
+# `-DENABLE_AVX=ON -DENABLE_ARM=ON` on x86 would take the AVX branch and drop
+# ENABLE_ARM in silence.
+#
+# The diagnostics quote hptt_target_arch, the value the predicates were
+# computed from. CMAKE_SYSTEM_PROCESSOR can disagree with it under MSVC, where
+# quoting that instead would make the message contradict itself.
+# -----------------------------------------------------------------------------
+if(ENABLE_AVX AND NOT HPTT_TARGET_IS_X86)
+    message(FATAL_ERROR
+        "ENABLE_AVX=ON is valid only on an x86 target, but this build targets "
+        "'${hptt_target_arch}'. Use ENABLE_ARM=ON on arm64 or ENABLE_IBM=ON on "
+        "POWER.")
+endif()
+if(ENABLE_ARM AND NOT HPTT_TARGET_IS_ARM64)
+    message(FATAL_ERROR
+        "ENABLE_ARM=ON is valid only on a 64-bit ARM target, but this build "
+        "targets '${hptt_target_arch}'. The Neon kernels assume ARMv8-A, where "
+        "Advanced SIMD is mandatory; 32-bit ARM is not supported by this "
+        "option. Use ENABLE_AVX=ON on x86 or ENABLE_IBM=ON on POWER.")
+endif()
+if(ENABLE_IBM AND NOT HPTT_TARGET_IS_POWER)
+    message(FATAL_ERROR
+        "ENABLE_IBM=ON is valid only on a POWER target, but this build targets "
+        "'${hptt_target_arch}'. Use ENABLE_AVX=ON on x86 or ENABLE_ARM=ON on "
+        "arm64.")
+endif()
 
 # HPTT_INSTALL: ON by default for standalone builds, but a parent project
 # using add_subdirectory() can set it OFF if it doesn't want HPTT to emit
@@ -114,7 +154,7 @@ set(HPTT_PUBLIC_COMPILE_DEFINITIONS)
 # INTERFACE_COMPILE_OPTIONS, which is per-toolchain-correct (AppleClang in
 # particular often rejects a bare `-fopenmp`).
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND NOT FINE_TUNE
-   AND NOT APPLE AND NOT ENABLE_IBM AND NOT ENABLE_AVX AND HPTT_TARGET_IS_X86)
+   AND NOT APPLE AND NOT ENABLE_AVX AND HPTT_TARGET_IS_X86)
     # `x86-64` is the baseline x86 -march value. It is not a valid -march
     # anywhere else -- on aarch64 GCC rejects it outright with "unknown
     # value 'x86-64' for '-march'" -- so other architectures take the
@@ -125,42 +165,9 @@ elseif(CMAKE_CXX_COMPILER_ID STREQUAL "PGI")
     list(APPEND HPTT_PRIVATE_COMPILE_OPTIONS -silent -w -Mnovect)
 endif()
 
-# -----------------------------------------------------------------------------
-# Which micro-kernels to compile, and the ISA floor each one assumes.
-#
-# Every one of these options states an assumption about the target, so each is
-# rejected outright on an architecture that cannot satisfy it rather than
-# quietly emitting flags the compiler will refuse. ENABLE_ARM=ON on x86, for
-# instance, previously produced `-mfpu=neon` and Neon intrinsics on an x86
-# compile line and failed deep in the build with an unrelated-looking error.
-#
-# All three are validated here, before the selection chain below, because that
-# chain is if/elseif: a check living inside one branch never runs once an
-# earlier option has already matched. On an Intel Mac, where ENABLE_AVX
-# defaults ON, that is precisely the case where -DENABLE_ARM=ON would be
-# accepted and then silently ignored.
-# -----------------------------------------------------------------------------
-if(ENABLE_AVX AND NOT HPTT_TARGET_IS_X86)
-    message(FATAL_ERROR
-        "ENABLE_AVX=ON is valid only on an x86 target, but "
-        "CMAKE_SYSTEM_PROCESSOR is '${CMAKE_SYSTEM_PROCESSOR}'. Use "
-        "ENABLE_ARM=ON on arm64 or ENABLE_IBM=ON on POWER.")
-endif()
-if(ENABLE_ARM AND NOT HPTT_TARGET_IS_ARM64)
-    message(FATAL_ERROR
-        "ENABLE_ARM=ON is valid only on a 64-bit ARM target, but "
-        "CMAKE_SYSTEM_PROCESSOR is '${CMAKE_SYSTEM_PROCESSOR}'. The Neon "
-        "kernels assume ARMv8-A, where Advanced SIMD is mandatory; 32-bit ARM "
-        "is not supported by this option. Use ENABLE_AVX=ON on x86 or "
-        "ENABLE_IBM=ON on POWER.")
-endif()
-if(ENABLE_IBM AND NOT HPTT_TARGET_IS_POWER)
-    message(FATAL_ERROR
-        "ENABLE_IBM=ON is valid only on a POWER target, but "
-        "CMAKE_SYSTEM_PROCESSOR is '${CMAKE_SYSTEM_PROCESSOR}'. Use "
-        "ENABLE_AVX=ON on x86 or ENABLE_ARM=ON on arm64.")
-endif()
-
+# Which micro-kernels to compile, and the ISA floor each one assumes. The
+# options were validated against the target above, so at most one of these
+# branches can be taken.
 if(ENABLE_AVX)
     # The AVX kernels assume x86-64-v3: AVX, AVX2 and FMA. Benchmarked on this
     # tree, the v3 floor is what makes them pay -- AVX alone leaves the
@@ -200,10 +207,9 @@ elseif(ENABLE_IBM)
 endif()
 
 # macOS-only extra optimization flags. Which micro-kernels get compiled is
-# *not* decided here: ENABLE_AVX and ENABLE_ARM above own that on every
-# platform, and their defaults already cover Apple hardware (ENABLE_ARM=ON on
-# arm64, ENABLE_AVX=ON on an Intel Mac). Appending HPTT_ARCH_* here as well
-# would set it behind the back of an explicit -DENABLE_AVX=OFF.
+# *not* decided here: ENABLE_AVX and ENABLE_ARM own that on every platform
+# alike, Apple included. Appending HPTT_ARCH_* here would select a kernel
+# family behind the back of the option that governs it.
 if(APPLE)
     if(HPTT_TARGET_IS_ARM64)
         message(STATUS "Running on Apple Silicon (M-series)")
