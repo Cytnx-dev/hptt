@@ -159,15 +159,21 @@ elseif(ENABLE_ARM)
     endif()
     list(APPEND HPTT_PUBLIC_COMPILE_DEFINITIONS HPTT_ARCH_ARM)
 elseif(ENABLE_IBM)
-    list(APPEND HPTT_PRIVATE_COMPILE_OPTIONS -mtune=native -maltivec -mabi=altivec)
+    # AltiVec is a fixed ISA baseline shared by every supported POWER chip,
+    # so both flags stay portable across the architecture. Tuning for the
+    # specific host chip is FINE_TUNE's job.
+    list(APPEND HPTT_PRIVATE_COMPILE_OPTIONS -maltivec -mabi=altivec)
     list(APPEND HPTT_PUBLIC_COMPILE_DEFINITIONS HPTT_ARCH_IBM)
 endif()
 
 if(APPLE)
     if(CMAKE_SYSTEM_PROCESSOR MATCHES "arm64")
         message(STATUS "Running on Apple Silicon (M-series)")
+        # Optimization flags only. Targeting the ISA of the Mac running the
+        # build belongs to FINE_TUNE: Apple Silicon generations are not one
+        # ISA, so a binary built that way on an M4 can fault on an M1.
         list(APPEND HPTT_PRIVATE_COMPILE_OPTIONS
-            -O3 -ffast-math -funroll-loops -ftree-vectorize -mcpu=native)
+            -O3 -ffast-math -funroll-loops -ftree-vectorize)
         list(APPEND HPTT_PUBLIC_COMPILE_DEFINITIONS HPTT_ARCH_ARM)
     elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64")
         message(STATUS "Running on Intel-based macOS")
