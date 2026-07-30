@@ -195,6 +195,52 @@ jobs:
             exit 1
           fi
 
+      # Each ENABLE_* option states an assumption about the target, so the one
+      # that cannot hold here must be refused at configure time instead of
+      # putting flags on the command line that the compiler will reject much
+      # later. Negative test: pick the wrong option for this runner and require
+      # the configure to fail with the diagnostic, not with a build error.
+      - name: Check the ISA options reject the wrong architecture
+        run: |
+          if [ "$RUNNER_ARCH" = "ARM64" ]; then WRONG=-DENABLE_AVX=ON; else WRONG=-DENABLE_ARM=ON; fi
+          EXTRA=()
+          [ "$RUNNER_OS" = "macOS" ] && EXTRA+=("-DOpenMP_ROOT=$(brew --prefix libomp)")
+          [ "$RUNNER_OS" = "Windows" ] && EXTRA+=(-DCMAKE_C_COMPILER=cl -DCMAKE_CXX_COMPILER=cl)
+          if cmake -S . -B "${{ github.workspace }}/build-wrong-isa" -G Ninja \
+               "$WRONG" "${EXTRA[@]}" > wrong-isa.log 2>&1; then
+            echo "configure with $WRONG on $RUNNER_ARCH succeeded; expected FATAL_ERROR" >&2
+            exit 1
+          fi
+          grep -q "is valid only on" wrong-isa.log
+
+      # ENABLE_AVX=ON raises the floor to x86-64-v3 and selects the AVX
+      # kernels. An Intel Mac gets that by default, so macos-x64 already covers
+      # it; this adds the two x86 platforms that do not -- in particular MSVC,
+      # whose spelling of the floor is /arch:AVX2 rather than a -march level.
+      - name: Build with ENABLE_AVX=ON (x86 only)
+        if: runner.arch == 'X64'
+        run: |
+          EXTRA=()
+          [ "$RUNNER_OS" = "macOS" ] && EXTRA+=("-DOpenMP_ROOT=$(brew --prefix libomp)")
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            EXTRA+=(-DCMAKE_C_COMPILER=cl -DCMAKE_CXX_COMPILER=cl)
+            EXTRA+=(-DCMAKE_POLICY_DEFAULT_CMP0141=NEW)
+            EXTRA+=(-DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded)
+          fi
+          AVXDIR=${{ github.workspace }}/build-avx
+          cmake -S . -B "$AVXDIR" -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DENABLE_AVX=ON \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache "${EXTRA[@]}"
+          cmake --build "$AVXDIR"
+          grep -q -- 'HPTT_ARCH_AVX' "$AVXDIR/compile_commands.json"
+          cmake -S "$CONSUMER_SRC_DIR" -B "${{ github.workspace }}/consumer-avx" \
+            -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            -Dhptt_DIR="$AVXDIR" "${EXTRA[@]}"
+          cmake --build "${{ github.workspace }}/consumer-avx"
+          cd "${{ github.workspace }}/consumer-avx" && ./consumer
+
       - name: Consumer against the BUILD TREE
         # OpenMP_ROOT is needed here as well as when building HPTT:
         # hpttConfig.cmake re-runs find_dependency(OpenMP) in the
