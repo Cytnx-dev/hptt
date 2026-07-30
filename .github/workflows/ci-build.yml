@@ -320,11 +320,18 @@ jobs:
             EXTRA+=(-DCMAKE_POLICY_DEFAULT_CMP0141=NEW)
             EXTRA+=(-DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded)
           fi
+          # Deliberately no ccache here. ccache keys on the literal flag
+          # string, and `-march=native` does not tell it which CPU that
+          # resolved to, so an object built on one runner counts as a hit on
+          # another -- and the hosted runner fleet is not homogeneous. A
+          # restored cache then hands this job a library holding instructions
+          # the current CPU lacks, and the consumer dies with SIGILL. That is
+          # the very failure this PR is about, so the fix is to compile the
+          # fine-tuned objects fresh rather than to make the cache lie
+          # convincingly.
           cmake -S . -B "$FINE_TUNE_DIR" -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DFINE_TUNE=ON \
-            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
-            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
             ${{ matrix.arch_flags }} \
             "${EXTRA[@]}"
           cmake --build "$FINE_TUNE_DIR"
