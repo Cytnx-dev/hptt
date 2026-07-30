@@ -14,17 +14,37 @@ include(CMakePackageConfigHelpers)
 # Target-architecture predicates, decided once. Between them they set the
 # ENABLE_AVX / ENABLE_ARM defaults just below, reject those options on a target
 # that cannot honour them, and choose the baseline -march further down.
-if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64|amd64|i[3-6]86)$")
+#
+# What they must describe is the *target*, which CMAKE_SYSTEM_PROCESSOR does
+# not always name. CMake derives that variable from the compiler only for
+# WindowsCE (Modules/CMakeDetermineSystem.cmake); every other build copies
+# CMAKE_HOST_SYSTEM_PROCESSOR into it. So an MSVC cross build -- `vcvarsall
+# x64_arm64` with the Ninja generator and no toolchain file -- reports the
+# host's AMD64 while cl.exe targets ARM64, and nothing sets
+# CMAKE_CROSSCOMPILING either, because CMake clears it unless
+# CMAKE_SYSTEM_NAME was given. MSVC_CXX_ARCHITECTURE_ID comes from the
+# compiler's own _M_* macros, so it does name the target: prefer it wherever
+# it is set, which is MSVC and clang-cl only.
+set(hptt_target_arch "${CMAKE_SYSTEM_PROCESSOR}")
+if(MSVC_CXX_ARCHITECTURE_ID)
+    set(hptt_target_arch "${MSVC_CXX_ARCHITECTURE_ID}")
+endif()
+
+# `x64` and `X86` are MSVC's spellings; the rest are CMAKE_SYSTEM_PROCESSOR
+# values from other platforms. MSVC's `IA64` is Itanium, not x86.
+if(hptt_target_arch MATCHES "^(x86_64|AMD64|amd64|i[3-6]86|x64|X86)$")
     set(HPTT_TARGET_IS_X86 TRUE)
 else()
     set(HPTT_TARGET_IS_X86 FALSE)
 endif()
-if(CMAKE_SYSTEM_PROCESSOR MATCHES "(aarch64|arm64|ARM64)")
+# Substring match on purpose: it covers aarch64, arm64, ARM64 and MSVC's
+# ARM64EC. Plain `ARM` is 32-bit and correctly excluded.
+if(hptt_target_arch MATCHES "(aarch64|arm64|ARM64)")
     set(HPTT_TARGET_IS_ARM64 TRUE)
 else()
     set(HPTT_TARGET_IS_ARM64 FALSE)
 endif()
-if(CMAKE_SYSTEM_PROCESSOR MATCHES "(ppc64|powerpc|POWER)")
+if(hptt_target_arch MATCHES "(ppc64|powerpc|POWER)")
     set(HPTT_TARGET_IS_POWER TRUE)
 else()
     set(HPTT_TARGET_IS_POWER FALSE)
