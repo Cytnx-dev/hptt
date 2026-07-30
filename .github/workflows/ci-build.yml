@@ -74,6 +74,10 @@ jobs:
       INSTALL_DIR: ${{ github.workspace }}/install
       CONSUMER_SRC_DIR: ${{ github.workspace }}/tests/downstream_find_package
       FINE_TUNE_DIR: ${{ github.workspace }}/build-fine-tune
+      # Set here rather than assigned in a step: on Windows github.workspace is
+      # `D:\a\hptt\hptt`, and an unquoted bash assignment strips the
+      # backslashes, yielding `D:ahptthptt`.
+      AVX_DIR: ${{ github.workspace }}/build-avx
 
     steps:
       - uses: actions/checkout@v4
@@ -227,17 +231,16 @@ jobs:
             EXTRA+=(-DCMAKE_POLICY_DEFAULT_CMP0141=NEW)
             EXTRA+=(-DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded)
           fi
-          AVXDIR=${{ github.workspace }}/build-avx
-          cmake -S . -B "$AVXDIR" -G Ninja -DCMAKE_BUILD_TYPE=Release \
+          cmake -S . -B "$AVX_DIR" -G Ninja -DCMAKE_BUILD_TYPE=Release \
             -DENABLE_AVX=ON \
             -DCMAKE_C_COMPILER_LAUNCHER=ccache \
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache "${EXTRA[@]}"
-          cmake --build "$AVXDIR"
-          grep -q -- 'HPTT_ARCH_AVX' "$AVXDIR/compile_commands.json"
+          cmake --build "$AVX_DIR"
+          grep -q -- 'HPTT_ARCH_AVX' "$AVX_DIR/compile_commands.json"
           cmake -S "$CONSUMER_SRC_DIR" -B "${{ github.workspace }}/consumer-avx" \
             -G Ninja -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
-            -Dhptt_DIR="$AVXDIR" "${EXTRA[@]}"
+            -Dhptt_DIR="$AVX_DIR" "${EXTRA[@]}"
           cmake --build "${{ github.workspace }}/consumer-avx"
           cd "${{ github.workspace }}/consumer-avx" && ./consumer
 

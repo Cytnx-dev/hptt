@@ -113,14 +113,35 @@ endif()
 # quietly emitting flags the compiler will refuse. ENABLE_ARM=ON on x86, for
 # instance, previously produced `-mfpu=neon` and Neon intrinsics on an x86
 # compile line and failed deep in the build with an unrelated-looking error.
+#
+# All three are validated here, before the selection chain below, because that
+# chain is if/elseif: a check living inside one branch never runs once an
+# earlier option has already matched. On an Intel Mac, where ENABLE_AVX
+# defaults ON, that is precisely the case where -DENABLE_ARM=ON would be
+# accepted and then silently ignored.
 # -----------------------------------------------------------------------------
+if(ENABLE_AVX AND NOT HPTT_TARGET_IS_X86)
+    message(FATAL_ERROR
+        "ENABLE_AVX=ON is valid only on an x86 target, but "
+        "CMAKE_SYSTEM_PROCESSOR is '${CMAKE_SYSTEM_PROCESSOR}'. Use "
+        "ENABLE_ARM=ON on arm64 or ENABLE_IBM=ON on POWER.")
+endif()
+if(ENABLE_ARM AND NOT HPTT_TARGET_IS_ARM64)
+    message(FATAL_ERROR
+        "ENABLE_ARM=ON is valid only on a 64-bit ARM target, but "
+        "CMAKE_SYSTEM_PROCESSOR is '${CMAKE_SYSTEM_PROCESSOR}'. The Neon "
+        "kernels assume ARMv8-A, where Advanced SIMD is mandatory; 32-bit ARM "
+        "is not supported by this option. Use ENABLE_AVX=ON on x86 or "
+        "ENABLE_IBM=ON on POWER.")
+endif()
+if(ENABLE_IBM AND NOT HPTT_TARGET_IS_POWER)
+    message(FATAL_ERROR
+        "ENABLE_IBM=ON is valid only on a POWER target, but "
+        "CMAKE_SYSTEM_PROCESSOR is '${CMAKE_SYSTEM_PROCESSOR}'. Use "
+        "ENABLE_AVX=ON on x86 or ENABLE_ARM=ON on arm64.")
+endif()
+
 if(ENABLE_AVX)
-    if(NOT HPTT_TARGET_IS_X86)
-        message(FATAL_ERROR
-            "ENABLE_AVX=ON is valid only on an x86 target, but "
-            "CMAKE_SYSTEM_PROCESSOR is '${CMAKE_SYSTEM_PROCESSOR}'. Use "
-            "ENABLE_ARM=ON on arm64 or ENABLE_IBM=ON on POWER.")
-    endif()
     # The AVX kernels assume x86-64-v3: AVX, AVX2 and FMA. Benchmarked on this
     # tree, the v3 floor is what makes them pay -- AVX alone leaves the
     # non-kernel paths unvectorized, and AVX-512 adds nothing measurable to a
@@ -145,26 +166,12 @@ if(ENABLE_AVX)
     endif()
     list(APPEND HPTT_PUBLIC_COMPILE_DEFINITIONS HPTT_ARCH_AVX)
 elseif(ENABLE_ARM)
-    if(NOT HPTT_TARGET_IS_ARM64)
-        message(FATAL_ERROR
-            "ENABLE_ARM=ON is valid only on a 64-bit ARM target, but "
-            "CMAKE_SYSTEM_PROCESSOR is '${CMAKE_SYSTEM_PROCESSOR}'. The Neon "
-            "kernels assume ARMv8-A, where Advanced SIMD is mandatory; 32-bit "
-            "ARM is not supported by this option. Use ENABLE_AVX=ON on x86 or "
-            "ENABLE_IBM=ON on POWER.")
-    endif()
     # No flag selects Advanced SIMD here: it is part of the mandatory ARMv8-A
     # baseline, so every arm64 compiler already has it on. (`-mfpu=neon` is a
     # 32-bit-ARM-only spelling and is rejected on aarch64.) HPTT_ARCH_ARM is
     # what selects the Neon kernels and REGISTER_BITS=128.
     list(APPEND HPTT_PUBLIC_COMPILE_DEFINITIONS HPTT_ARCH_ARM)
 elseif(ENABLE_IBM)
-    if(NOT HPTT_TARGET_IS_POWER)
-        message(FATAL_ERROR
-            "ENABLE_IBM=ON is valid only on a POWER target, but "
-            "CMAKE_SYSTEM_PROCESSOR is '${CMAKE_SYSTEM_PROCESSOR}'. Use "
-            "ENABLE_AVX=ON on x86 or ENABLE_ARM=ON on arm64.")
-    endif()
     # AltiVec is a fixed ISA baseline shared by every supported POWER chip, so
     # both flags stay portable across the architecture. Tuning for the specific
     # host chip is FINE_TUNE's job.
