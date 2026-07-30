@@ -52,6 +52,10 @@ Using CMake:
     mkdir build && cd build
     cmake .. -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++
     #Optionally one of [-DENABLE_ARM=ON -DENABLE_AVX=ON -DENABLE_IBM=ON]    
+    #Optionally -DFINE_TUNE=ON to tune for the CPU running the build. The
+    #resulting binary uses whatever that CPU supports, so it is not portable
+    #to other machines of the same architecture. Leave it off when the build
+    #will be redistributed.
 
 This should create 'libhptt.so' inside the ./lib folder.
 

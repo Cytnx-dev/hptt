@@ -7,13 +7,112 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+include(CheckCXXCompilerFlag)
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
 
-option(ENABLE_IBM "Enable IBM POWER architecture support" OFF)
-option(ENABLE_AVX "Enable x86 AVX (REGISTER_BITS=256) support" OFF)
-option(ENABLE_ARM "Enable ARM/Neon (REGISTER_BITS=128) support" OFF)
-option(FINE_TUNE "Fine-tune for the host CPU (uses -march=native; produces non-portable binaries)" OFF)
+# Target-architecture predicates, decided once. They reject an ISA option the
+# target cannot honour (just below) and pick the baseline -march further down.
+# What they deliberately do not do is turn an option on: every ISA option
+# defaults OFF on every platform, so the architecture only ever vetoes a
+# request, never makes one.
+#
+# What they must describe is the *target*, which CMAKE_SYSTEM_PROCESSOR does
+# not always name. CMake derives that variable from the compiler only for
+# WindowsCE (Modules/CMakeDetermineSystem.cmake); every other build copies
+# CMAKE_HOST_SYSTEM_PROCESSOR into it. So an MSVC cross build -- `vcvarsall
+# x64_arm64` with the Ninja generator and no toolchain file -- reports the
+# host's AMD64 while cl.exe targets ARM64, and nothing sets
+# CMAKE_CROSSCOMPILING either, because CMake clears it unless
+# CMAKE_SYSTEM_NAME was given. MSVC_CXX_ARCHITECTURE_ID comes from the
+# compiler's own _M_* macros, so it does name the target: prefer it wherever
+# it is set, which is MSVC and clang-cl only.
+set(hptt_target_arch "${CMAKE_SYSTEM_PROCESSOR}")
+if(MSVC_CXX_ARCHITECTURE_ID)
+    set(hptt_target_arch "${MSVC_CXX_ARCHITECTURE_ID}")
+endif()
+
+# `x64` and `X86` are MSVC's spellings; the rest are CMAKE_SYSTEM_PROCESSOR
+# values from other platforms. MSVC's `IA64` is Itanium, not x86.
+if(hptt_target_arch MATCHES "^(x86_64|AMD64|amd64|i[3-6]86|x64|X86)$")
+    set(HPTT_TARGET_IS_X86 TRUE)
+else()
+    set(HPTT_TARGET_IS_X86 FALSE)
+endif()
+# Substring match on purpose: it covers aarch64, arm64, ARM64 and MSVC's
+# ARM64EC. Plain `ARM` is 32-bit and correctly excluded.
+if(hptt_target_arch MATCHES "(aarch64|arm64|ARM64)")
+    set(HPTT_TARGET_IS_ARM64 TRUE)
+else()
+    set(HPTT_TARGET_IS_ARM64 FALSE)
+endif()
+if(hptt_target_arch MATCHES "(ppc64|powerpc|POWER)")
+    set(HPTT_TARGET_IS_POWER TRUE)
+else()
+    set(HPTT_TARGET_IS_POWER FALSE)
+endif()
+
+# Every one of these defaults OFF, on every platform. A default build is the
+# portable one, and each step away from portability is named explicitly by
+# whoever runs the build -- which is how README.md documents them ("Optionally
+# one of ...") and how the Makefile targets they come from behave: `make avx`,
+# `make arm` and `make ibm` each opt in to one kernel family, and nothing is
+# selected without being asked for.
+#
+# Each ISA option states an assumption about the target rather than probing for
+# one, and is refused below on a target that cannot satisfy it:
+#
+#   ENABLE_AVX  x86-64-v3: AVX, AVX2 and FMA.
+#   ENABLE_ARM  ARMv8-A/arm64, where Advanced SIMD is mandatory. 32-bit ARM
+#               does not qualify -- Neon is optional there.
+#   ENABLE_IBM  POWER with AltiVec.
+#
+# The three are mutually exclusive in effect: they name different
+# architectures and the predicates above are mutually exclusive, so on any one
+# target at most one of them survives validation.
+option(ENABLE_AVX "Enable x86 AVX kernels, assuming an x86-64-v3 target" OFF)
+option(ENABLE_ARM "Enable ARM/Neon kernels, assuming an ARMv8-A arm64 target" OFF)
+option(ENABLE_IBM "Enable IBM POWER/AltiVec kernels, assuming a POWER target" OFF)
+option(FINE_TUNE "Fine-tune for the CPU running the build (produces non-portable binaries)" OFF)
+
+# -----------------------------------------------------------------------------
+# Validation -- the one place the target architecture has any say in these
+# options. An option the target cannot honour is refused here, at configure
+# time, instead of putting flags and intrinsics on the compile line for the
+# compiler to reject much later: ENABLE_ARM on x86 defines HPTT_ARCH_ARM, and
+# the Neon intrinsics that macro selects in src/transpose.cpp fail deep in the
+# build with an error naming an intrinsic rather than the option that asked for
+# it.
+#
+# All three checks are independent and all three run, because the selection
+# chain further down is if/elseif: a check placed inside one of its branches
+# would never run once an earlier option had already matched, so
+# `-DENABLE_AVX=ON -DENABLE_ARM=ON` on x86 would take the AVX branch and drop
+# ENABLE_ARM in silence.
+#
+# The diagnostics quote hptt_target_arch, the value the predicates were
+# computed from. CMAKE_SYSTEM_PROCESSOR can disagree with it under MSVC, where
+# quoting that instead would make the message contradict itself.
+# -----------------------------------------------------------------------------
+if(ENABLE_AVX AND NOT HPTT_TARGET_IS_X86)
+    message(FATAL_ERROR
+        "ENABLE_AVX=ON is valid only on an x86 target, but this build targets "
+        "'${hptt_target_arch}'. Use ENABLE_ARM=ON on arm64 or ENABLE_IBM=ON on "
+        "POWER.")
+endif()
+if(ENABLE_ARM AND NOT HPTT_TARGET_IS_ARM64)
+    message(FATAL_ERROR
+        "ENABLE_ARM=ON is valid only on a 64-bit ARM target, but this build "
+        "targets '${hptt_target_arch}'. The Neon kernels assume ARMv8-A, where "
+        "Advanced SIMD is mandatory; 32-bit ARM is not supported by this "
+        "option. Use ENABLE_AVX=ON on x86 or ENABLE_IBM=ON on POWER.")
+endif()
+if(ENABLE_IBM AND NOT HPTT_TARGET_IS_POWER)
+    message(FATAL_ERROR
+        "ENABLE_IBM=ON is valid only on a POWER target, but this build targets "
+        "'${hptt_target_arch}'. Use ENABLE_AVX=ON on x86 or ENABLE_ARM=ON on "
+        "arm64.")
+endif()
 
 # HPTT_INSTALL: ON by default for standalone builds, but a parent project
 # using add_subdirectory() can set it OFF if it doesn't want HPTT to emit
@@ -48,71 +147,145 @@ option(HPTT_BUILD_SHARED "Build the shared HPTT library (hptt_dyn)" ON)
 set(HPTT_PRIVATE_COMPILE_OPTIONS)
 set(HPTT_PUBLIC_COMPILE_DEFINITIONS)
 
-# Per-compiler architecture / optimization flags. OpenMP-specific flags
-# (`-fopenmp`, `-qopenmp`, `-qsmp=omp`, etc.) are intentionally *not* listed
-# here — `find_package(OpenMP)` + the PUBLIC `OpenMP::OpenMP_CXX` link below
-# provides them via the imported target's INTERFACE_COMPILE_OPTIONS, which
-# is per-toolchain-correct (AppleClang in particular often rejects a bare
-# `-fopenmp`).
-if(CMAKE_CXX_COMPILER_ID STREQUAL "Intel")
-    list(APPEND HPTT_PRIVATE_COMPILE_OPTIONS -xhost)
-elseif(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
-    if(APPLE)
-        list(APPEND HPTT_PRIVATE_COMPILE_OPTIONS -mtune=native)
-    elseif(NOT ENABLE_IBM)
-        if(FINE_TUNE)
-            list(APPEND HPTT_PRIVATE_COMPILE_OPTIONS -march=native -mtune=native)
-        elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64|amd64|i[3-6]86)$")
-            # `x86-64` is the baseline x86 -march value. It is not a valid
-            # -march anywhere else -- on aarch64 GCC rejects it outright
-            # with "unknown value 'x86-64' for '-march'" -- so other
-            # architectures take the compiler's own default.
-            list(APPEND HPTT_PRIVATE_COMPILE_OPTIONS -march=x86-64 -mtune=generic)
-        endif()
-    endif()
-elseif(CMAKE_CXX_COMPILER_ID STREQUAL "Clang" OR CMAKE_CXX_COMPILER_ID STREQUAL "AppleClang")
-    if(FINE_TUNE)
-        list(APPEND HPTT_PRIVATE_COMPILE_OPTIONS -march=native)
-    endif()
+# Per-compiler baseline flags, applied whether or not FINE_TUNE is on.
+# OpenMP-specific flags (`-fopenmp`, `-qopenmp`, `-qsmp=omp`, etc.) are
+# intentionally *not* listed here — `find_package(OpenMP)` + the PUBLIC
+# `OpenMP::OpenMP_CXX` link below provides them via the imported target's
+# INTERFACE_COMPILE_OPTIONS, which is per-toolchain-correct (AppleClang in
+# particular often rejects a bare `-fopenmp`).
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND NOT FINE_TUNE
+   AND NOT APPLE AND NOT ENABLE_AVX AND HPTT_TARGET_IS_X86)
+    # `x86-64` is the baseline x86 -march value. It is not a valid -march
+    # anywhere else -- on aarch64 GCC rejects it outright with "unknown
+    # value 'x86-64' for '-march'" -- so other architectures take the
+    # compiler's own default. FINE_TUNE selects the host CPU instead, so the
+    # two are mutually exclusive.
+    list(APPEND HPTT_PRIVATE_COMPILE_OPTIONS -march=x86-64 -mtune=generic)
 elseif(CMAKE_CXX_COMPILER_ID STREQUAL "PGI")
     list(APPEND HPTT_PRIVATE_COMPILE_OPTIONS -silent -w -Mnovect)
 endif()
 
+# Which micro-kernels to compile, and the ISA floor each one assumes. The
+# options were validated against the target above, so at most one of these
+# branches can be taken.
 if(ENABLE_AVX)
+    # The AVX kernels assume x86-64-v3: AVX, AVX2 and FMA. Benchmarked on this
+    # tree, the v3 floor is what makes them pay -- AVX alone leaves the
+    # non-kernel paths unvectorized, and AVX-512 adds nothing measurable to a
+    # 256-bit transpose kernel.
     if(MSVC)
-        list(APPEND HPTT_PRIVATE_COMPILE_OPTIONS /arch:AVX)
+        list(APPEND HPTT_PRIVATE_COMPILE_OPTIONS /arch:AVX2)
     else()
-        list(APPEND HPTT_PRIVATE_COMPILE_OPTIONS -mavx)
+        # `x86-64-v3` is the psABI level name, understood by GCC 11+ and
+        # Clang 12+. Older compilers know the individual features but not the
+        # level, so fall back to spelling it out.
+        check_cxx_compiler_flag("-march=x86-64-v3" HPTT_CXX_ACCEPTS_MARCH_X86_64_V3)
+        if(HPTT_CXX_ACCEPTS_MARCH_X86_64_V3)
+            list(APPEND HPTT_PRIVATE_COMPILE_OPTIONS -march=x86-64-v3)
+        else()
+            list(APPEND HPTT_PRIVATE_COMPILE_OPTIONS -mavx -mavx2 -mfma)
+        endif()
+        # v3 replaces the plain x86-64 floor above, but the binary is still
+        # meant to run on any v3 machine, so scheduling stays generic.
+        if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+            list(APPEND HPTT_PRIVATE_COMPILE_OPTIONS -mtune=generic)
+        endif()
     endif()
     list(APPEND HPTT_PUBLIC_COMPILE_DEFINITIONS HPTT_ARCH_AVX)
 elseif(ENABLE_ARM)
-    # `-mfpu=neon` is a GCC/Clang spelling, and it exists only for 32-bit
-    # ARM targets. Both halves of the condition are needed, for separate
-    # reasons: MSVC has no `-mfpu` option on any target, and a 64-bit ARM
-    # target has Advanced SIMD in its baseline ISA with no `-mfpu` to
-    # select it (GCC on aarch64 errors with "unknown value 'neon'").
-    # HPTT_ARCH_ARM below is what actually selects the Neon kernels.
-    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang"
-       AND NOT CMAKE_SYSTEM_PROCESSOR MATCHES "(aarch64|arm64|ARM64)")
-        list(APPEND HPTT_PRIVATE_COMPILE_OPTIONS -mfpu=neon)
-    endif()
+    # No flag selects Advanced SIMD here: it is part of the mandatory ARMv8-A
+    # baseline, so every arm64 compiler already has it on. (`-mfpu=neon` is a
+    # 32-bit-ARM-only spelling and is rejected on aarch64.) HPTT_ARCH_ARM is
+    # what selects the Neon kernels and REGISTER_BITS=128.
     list(APPEND HPTT_PUBLIC_COMPILE_DEFINITIONS HPTT_ARCH_ARM)
 elseif(ENABLE_IBM)
-    list(APPEND HPTT_PRIVATE_COMPILE_OPTIONS -mtune=native -maltivec -mabi=altivec)
+    # AltiVec is a fixed ISA baseline shared by every supported POWER chip, so
+    # both flags stay portable across the architecture. Tuning for the specific
+    # host chip is FINE_TUNE's job.
+    list(APPEND HPTT_PRIVATE_COMPILE_OPTIONS -maltivec -mabi=altivec)
     list(APPEND HPTT_PUBLIC_COMPILE_DEFINITIONS HPTT_ARCH_IBM)
 endif()
 
+# macOS-only extra optimization flags. Which micro-kernels get compiled is
+# *not* decided here: ENABLE_AVX and ENABLE_ARM own that on every platform
+# alike, Apple included. Appending HPTT_ARCH_* here would select a kernel
+# family behind the back of the option that governs it.
 if(APPLE)
-    if(CMAKE_SYSTEM_PROCESSOR MATCHES "arm64")
+    if(HPTT_TARGET_IS_ARM64)
         message(STATUS "Running on Apple Silicon (M-series)")
-        list(APPEND HPTT_PRIVATE_COMPILE_OPTIONS
-            -O3 -ffast-math -funroll-loops -ftree-vectorize -mcpu=native)
-        list(APPEND HPTT_PUBLIC_COMPILE_DEFINITIONS HPTT_ARCH_ARM)
-    elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64")
+    elseif(HPTT_TARGET_IS_X86)
         message(STATUS "Running on Intel-based macOS")
-        list(APPEND HPTT_PRIVATE_COMPILE_OPTIONS
-            -O3 -ffast-math -funroll-loops -ftree-vectorize -mavx)
-        list(APPEND HPTT_PUBLIC_COMPILE_DEFINITIONS HPTT_ARCH_AVX)
+    endif()
+    list(APPEND HPTT_PRIVATE_COMPILE_OPTIONS
+        -O3 -ffast-math -funroll-loops -ftree-vectorize)
+endif()
+
+# Appended last on purpose: `-march=native` / `-mcpu=native` must come after
+# any baseline -march selected above (the x86-64 floor, or the x86-64-v3 floor
+# ENABLE_AVX sets), because the compiler honours the last -march on the command
+# line. FINE_TUNE therefore overrides the portable floor rather than losing to
+# it.
+# -----------------------------------------------------------------------------
+# FINE_TUNE: target the CPU this build is running on.
+#
+# There is no portable spelling for that, and picking the wrong one either
+# fails the build or does nothing at all:
+#
+#   x86      `-march=native` selects the host ISA and implies
+#            `-mtune=native`. `-mcpu=` must not be offered here: GCC only
+#            warns ("'-mcpu=' is deprecated"), so a probe would accept a flag
+#            that merely sets scheduling, and Clang rejects it outright
+#            ("unsupported option '-mcpu=' for target 'x86_64-...'").
+#   ARM      `-mcpu=native` selects the host ISA *and* its scheduling model,
+#            where `-march=` names only an architecture revision.
+#   POWER    `-mcpu=native`; the target has no `-march=` option at all
+#            ("unsupported option '-march=' for target 'powerpc64le-...'").
+#   ICC/ICX  `-xhost` covers the whole thing under one name.
+#   MSVC     has no equivalent on any architecture: `/arch:` only takes
+#            explicit ISA levels, never the host's.
+#
+# So the target architecture fixes the order candidates are offered in, and a
+# compile probe decides which of them the toolchain in hand actually accepts.
+# A toolchain that accepts none is reported rather than passed over in
+# silence.
+# -----------------------------------------------------------------------------
+if(FINE_TUNE)
+    if(CMAKE_CROSSCOMPILING)
+        message(WARNING
+            "FINE_TUNE=ON while cross-compiling: `native` resolves to the CPU of "
+            "the build machine, not of the target. Name the target CPU through "
+            "CMAKE_CXX_FLAGS instead.")
+    endif()
+
+    if(CMAKE_CXX_COMPILER_ID MATCHES "^Intel")  # Intel (icpc) and IntelLLVM (icpx)
+        set(hptt_host_tune_candidates -xhost)
+    elseif(HPTT_TARGET_IS_X86)
+        set(hptt_host_tune_candidates -march=native)
+    else()
+        set(hptt_host_tune_candidates -mcpu=native -march=native)
+    endif()
+    # Last resort on every target: re-tune scheduling for the host without
+    # touching the instruction set.
+    list(APPEND hptt_host_tune_candidates -mtune=native)
+
+    set(HPTT_HOST_TUNE_FLAG "")
+    foreach(flag IN LISTS hptt_host_tune_candidates)
+        string(MAKE_C_IDENTIFIER "HPTT_CXX_ACCEPTS_${flag}" probe_result)
+        check_cxx_compiler_flag("${flag}" ${probe_result})
+        if(${probe_result})
+            set(HPTT_HOST_TUNE_FLAG "${flag}")
+            break()
+        endif()
+    endforeach()
+
+    if(HPTT_HOST_TUNE_FLAG)
+        message(STATUS "HPTT: fine-tuning for the host CPU with ${HPTT_HOST_TUNE_FLAG}")
+        list(APPEND HPTT_PRIVATE_COMPILE_OPTIONS ${HPTT_HOST_TUNE_FLAG})
+    else()
+        message(WARNING
+            "FINE_TUNE=ON has no effect: ${CMAKE_CXX_COMPILER_ID} accepted none of "
+            "\"${hptt_host_tune_candidates}\" for ${CMAKE_SYSTEM_PROCESSOR}. The "
+            "build continues with the compiler's default target CPU.")
     endif()
 endif()
 

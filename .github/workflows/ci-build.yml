@@ -34,32 +34,21 @@ jobs:
       # One platform failing should not hide the results of the others.
       fail-fast: false
       matrix:
-        # arch_flags selects HPTT's SIMD kernels. The ARM entries pass
-        # ENABLE_ARM=ON so the Neon micro-kernels in src/transpose.cpp are
-        # actually compiled and run, rather than silently falling back to
-        # the generic scalar path that the default configuration selects on
-        # those targets.
         include:
           - name: linux-x64
             runner: ubuntu-latest
-            arch_flags: ""
           - name: linux-arm64
             runner: ubuntu-24.04-arm
-            arch_flags: "-DENABLE_ARM=ON"
           - name: macos-x64
             runner: macos-15-intel
-            arch_flags: ""
           - name: macos-arm64
             runner: macos-latest
-            arch_flags: "-DENABLE_ARM=ON"
           - name: windows-x64
             runner: windows-latest
             msvc_arch: x64
-            arch_flags: ""
           - name: windows-arm64
             runner: windows-11-arm
             msvc_arch: arm64
-            arch_flags: "-DENABLE_ARM=ON"
 
     defaults:
       run:
@@ -72,6 +61,11 @@ jobs:
       BUILD_DIR: ${{ github.workspace }}/build
       INSTALL_DIR: ${{ github.workspace }}/install
       CONSUMER_SRC_DIR: ${{ github.workspace }}/tests/downstream_find_package
+      FINE_TUNE_DIR: ${{ github.workspace }}/build-fine-tune
+      # Set here rather than assigned in a step: on Windows github.workspace is
+      # `D:\a\hptt\hptt`, and an unquoted bash assignment strips the
+      # backslashes, yielding `D:ahptthptt`.
+      ISA_DIR: ${{ github.workspace }}/build-isa
 
     steps:
       - uses: actions/checkout@v4
@@ -155,11 +149,104 @@ jobs:
             -DCMAKE_INSTALL_PREFIX="$INSTALL_DIR" \
             -DCMAKE_C_COMPILER_LAUNCHER=ccache \
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
-            ${{ matrix.arch_flags }} \
             "${EXTRA[@]}"
 
       - name: Build HPTT
         run: cmake --build "$BUILD_DIR"
+
+      # HPTT ships as a binary, so a default build must carry nothing specific to
+      # the machine that built it -- a `native`-tuned artifact can fault on a
+      # different CPU of the same architecture -- and must assume no ISA above
+      # the architecture's own baseline. FINE_TUNE and the three ENABLE_* options
+      # are the documented ways to ask for either, and this asserts they are the
+      # only ways to arrive there.
+      #
+      # Both halves run on every platform, both defaults being uniform across
+      # them: MSVC has no host-tuning flag, so "none present" is the expected
+      # answer there too, and no architecture selects a kernel family for you.
+      #
+      # The ISA half matters precisely because the scalar fallback is correct:
+      # were an option to turn itself on behind the caller's back, every other
+      # check in this job would still pass and report nothing.
+      - name: Check the default build is portable
+        run: |
+          if grep -Eo -- '-(march|mcpu|mtune)=native|-xhost' \
+             "$BUILD_DIR/compile_commands.json" | sort -u; then
+            echo "the host-tuning flag(s) above leaked into a FINE_TUNE=OFF build" >&2
+            exit 1
+          fi
+          if grep -Eo -- 'HPTT_ARCH_(AVX|ARM|IBM)' \
+             "$BUILD_DIR/compile_commands.json" | sort -u; then
+            echo "the ISA macro(s) above appeared with every ENABLE_* option off" >&2
+            exit 1
+          fi
+
+      # Each ENABLE_* option states an assumption about the target, so the one
+      # that cannot hold here must be refused at configure time instead of
+      # putting flags on the command line that the compiler will reject much
+      # later. Negative test: pick the wrong option for this runner and require
+      # the configure to fail with the diagnostic, not with a build error.
+      - name: Check the ISA options reject the wrong architecture
+        run: |
+          if [ "$RUNNER_ARCH" = "ARM64" ]; then WRONG=-DENABLE_AVX=ON; else WRONG=-DENABLE_ARM=ON; fi
+          EXTRA=()
+          [ "$RUNNER_OS" = "macOS" ] && EXTRA+=("-DOpenMP_ROOT=$(brew --prefix libomp)")
+          [ "$RUNNER_OS" = "Windows" ] && EXTRA+=(-DCMAKE_C_COMPILER=cl -DCMAKE_CXX_COMPILER=cl)
+          if cmake -S . -B "${{ github.workspace }}/build-wrong-isa" -G Ninja \
+               "$WRONG" "${EXTRA[@]}" > wrong-isa.log 2>&1; then
+            echo "configure with $WRONG on $RUNNER_ARCH succeeded; expected FATAL_ERROR" >&2
+            exit 1
+          fi
+          grep -q "is valid only on" wrong-isa.log
+
+      # The ISA option this runner's architecture accepts, exercised the way a
+      # user opts into it. One step covers both, the two being symmetric: each
+      # is off by default and valid on exactly one architecture. ENABLE_AVX
+      # raises the floor to x86-64-v3 and selects the AVX kernels, which on MSVC
+      # is spelled /arch:AVX2 rather than as a -march level; ENABLE_ARM selects
+      # the Neon kernels and REGISTER_BITS=128, adding no flag at all because
+      # Advanced SIMD is mandatory on ARMv8-A.
+      #
+      # Grepping for the macro is what catches an option that went nowhere: the
+      # scalar fallback computes the same results, so the consumer below passes
+      # either way. The consumer then checks that the ISA build is not merely
+      # compilable but correct, and that a machine of this architecture can
+      # actually execute what the option produced.
+      - name: Build with the target's ISA kernels enabled
+        run: |
+          if [ "$RUNNER_ARCH" = "ARM64" ]; then
+            ISA_OPTION=-DENABLE_ARM=ON
+            ISA_MACRO=HPTT_ARCH_ARM
+          else
+            ISA_OPTION=-DENABLE_AVX=ON
+            ISA_MACRO=HPTT_ARCH_AVX
+          fi
+          EXTRA=()
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            EXTRA+=("-DOpenMP_ROOT=$(brew --prefix libomp)")
+          fi
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            EXTRA+=(-DCMAKE_C_COMPILER=cl -DCMAKE_CXX_COMPILER=cl)
+            EXTRA+=(-DCMAKE_POLICY_DEFAULT_CMP0141=NEW)
+            EXTRA+=(-DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded)
+          fi
+          cmake -S . -B "$ISA_DIR" -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            "$ISA_OPTION" \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache "${EXTRA[@]}"
+          cmake --build "$ISA_DIR"
+          if ! grep -q -- "$ISA_MACRO" "$ISA_DIR/compile_commands.json"; then
+            echo "$ISA_OPTION did not put $ISA_MACRO on the compile line" >&2
+            exit 1
+          fi
+          cmake -S "$CONSUMER_SRC_DIR" -B "${{ github.workspace }}/consumer-isa" \
+            -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            -Dhptt_DIR="$ISA_DIR" "${EXTRA[@]}"
+          cmake --build "${{ github.workspace }}/consumer-isa"
+          cd "${{ github.workspace }}/consumer-isa"
+          ./consumer
+          ./consumer_dyn
 
       # --- Downstream consumer: build tree ------------------------------
       # export(TARGETS ...) plus the build-dir hpttConfig.cmake make the
@@ -221,6 +308,66 @@ jobs:
           test -f "$INSTALL_DIR/lib/hptt.lib"
           test -f "$INSTALL_DIR/lib/hptt_dyn.lib"
           test -f "$INSTALL_DIR/bin/hptt.dll"
+
+      # FINE_TUNE=ON has to keep working on every platform. The flag that
+      # targets the host CPU is spelled differently per architecture and
+      # compiler, and the wrong spelling fails in one of two ways: a hard
+      # error (Clang rejects `-mcpu=` on x86; POWER has no `-march=` at all)
+      # or a silent no-op that leaves the build unaffected. Building catches
+      # the first; grepping the compile line for the flag catches the second.
+      # The consumer then runs against this build tree, so the fine-tuned
+      # library is checked for correct results too, not just for compiling.
+      - name: Build with FINE_TUNE=ON
+        run: |
+          EXTRA=()
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            EXTRA+=("-DOpenMP_ROOT=$(brew --prefix libomp)")
+          fi
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            EXTRA+=(-DCMAKE_C_COMPILER=cl -DCMAKE_CXX_COMPILER=cl)
+            EXTRA+=(-DCMAKE_POLICY_DEFAULT_CMP0141=NEW)
+            EXTRA+=(-DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded)
+          fi
+          # Deliberately no ccache here. ccache keys on the literal flag
+          # string, and `-march=native` does not tell it which CPU that
+          # resolved to, so an object built on one runner counts as a hit on
+          # another -- and the hosted runner fleet is not homogeneous. A
+          # restored cache then hands this job a library holding instructions
+          # the current CPU lacks, and the consumer dies with SIGILL. That is
+          # the very failure this PR is about, so the fix is to compile the
+          # fine-tuned objects fresh rather than to make the cache lie
+          # convincingly.
+          cmake -S . -B "$FINE_TUNE_DIR" -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DFINE_TUNE=ON \
+            "${EXTRA[@]}"
+          cmake --build "$FINE_TUNE_DIR"
+
+      # MSVC has no host-tuning flag on any architecture, so there is nothing
+      # to find there. Every other toolchain must show one on the compile
+      # line, otherwise FINE_TUNE=ON silently did nothing.
+      - name: Check FINE_TUNE reached the compile line
+        if: runner.os != 'Windows'
+        run: |
+          if ! grep -Eq -- '-(march|mcpu|mtune)=native|-xhost' \
+               "$FINE_TUNE_DIR/compile_commands.json"; then
+            echo "FINE_TUNE=ON produced no host-tuning flag on $RUNNER_OS/$(uname -m)" >&2
+            exit 1
+          fi
+
+      - name: Consumer against the FINE_TUNE build tree
+        run: |
+          EXTRA=()
+          [ "$RUNNER_OS" = "Windows" ] && EXTRA+=(-DCMAKE_CXX_COMPILER=cl)
+          [ "$RUNNER_OS" = "macOS" ] && EXTRA+=("-DOpenMP_ROOT=$(brew --prefix libomp)")
+          cmake -S "$CONSUMER_SRC_DIR" -B "${{ github.workspace }}/consumer-fine-tune" \
+            -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            -Dhptt_DIR="$FINE_TUNE_DIR" "${EXTRA[@]}"
+          cmake --build "${{ github.workspace }}/consumer-fine-tune"
+          cd "${{ github.workspace }}/consumer-fine-tune"
+          ./consumer
+          ./consumer_dyn
 
       # HPTT_BUILD_SHARED=OFF has to keep configuring, building and
       # exporting on its own -- it is how a parent project that links only
