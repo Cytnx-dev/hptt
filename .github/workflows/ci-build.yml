@@ -72,6 +72,7 @@ jobs:
       BUILD_DIR: ${{ github.workspace }}/build
       INSTALL_DIR: ${{ github.workspace }}/install
       CONSUMER_SRC_DIR: ${{ github.workspace }}/tests/downstream_find_package
+      FINE_TUNE_DIR: ${{ github.workspace }}/build-fine-tune
 
     steps:
       - uses: actions/checkout@v4
@@ -221,6 +222,60 @@ jobs:
           test -f "$INSTALL_DIR/lib/hptt.lib"
           test -f "$INSTALL_DIR/lib/hptt_dyn.lib"
           test -f "$INSTALL_DIR/bin/hptt.dll"
+
+      # FINE_TUNE=ON has to keep working on every platform. The flag that
+      # targets the host CPU is spelled differently per architecture and
+      # compiler, and the wrong spelling fails in one of two ways: a hard
+      # error (Clang rejects `-mcpu=` on x86; POWER has no `-march=` at all)
+      # or a silent no-op that leaves the build unaffected. Building catches
+      # the first; grepping the compile line for the flag catches the second.
+      # The consumer then runs against this build tree, so the fine-tuned
+      # library is checked for correct results too, not just for compiling.
+      - name: Build with FINE_TUNE=ON
+        run: |
+          EXTRA=()
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            EXTRA+=("-DOpenMP_ROOT=$(brew --prefix libomp)")
+          fi
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            EXTRA+=(-DCMAKE_C_COMPILER=cl -DCMAKE_CXX_COMPILER=cl)
+            EXTRA+=(-DCMAKE_POLICY_DEFAULT_CMP0141=NEW)
+            EXTRA+=(-DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded)
+          fi
+          cmake -S . -B "$FINE_TUNE_DIR" -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DFINE_TUNE=ON \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            ${{ matrix.arch_flags }} \
+            "${EXTRA[@]}"
+          cmake --build "$FINE_TUNE_DIR"
+
+      # MSVC has no host-tuning flag on any architecture, so there is nothing
+      # to find there. Every other toolchain must show one on the compile
+      # line, otherwise FINE_TUNE=ON silently did nothing.
+      - name: Check FINE_TUNE reached the compile line
+        if: runner.os != 'Windows'
+        run: |
+          if ! grep -Eq -- '-(march|mcpu|mtune)=native|-xhost' \
+               "$FINE_TUNE_DIR/compile_commands.json"; then
+            echo "FINE_TUNE=ON produced no host-tuning flag on $RUNNER_OS/$(uname -m)" >&2
+            exit 1
+          fi
+
+      - name: Consumer against the FINE_TUNE build tree
+        run: |
+          EXTRA=()
+          [ "$RUNNER_OS" = "Windows" ] && EXTRA+=(-DCMAKE_CXX_COMPILER=cl)
+          [ "$RUNNER_OS" = "macOS" ] && EXTRA+=("-DOpenMP_ROOT=$(brew --prefix libomp)")
+          cmake -S "$CONSUMER_SRC_DIR" -B "${{ github.workspace }}/consumer-fine-tune" \
+            -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            -Dhptt_DIR="$FINE_TUNE_DIR" "${EXTRA[@]}"
+          cmake --build "${{ github.workspace }}/consumer-fine-tune"
+          cd "${{ github.workspace }}/consumer-fine-tune"
+          ./consumer
+          ./consumer_dyn
 
       # HPTT_BUILD_SHARED=OFF has to keep configuring, building and
       # exporting on its own -- it is how a parent project that links only
