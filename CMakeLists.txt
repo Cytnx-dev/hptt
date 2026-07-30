@@ -62,7 +62,11 @@ elseif(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
     elseif(NOT ENABLE_IBM)
         if(FINE_TUNE)
             list(APPEND HPTT_PRIVATE_COMPILE_OPTIONS -march=native -mtune=native)
-        else()
+        elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64|amd64|i[3-6]86)$")
+            # `x86-64` is the baseline x86 -march value. It is not a valid
+            # -march anywhere else -- on aarch64 GCC rejects it outright
+            # with "unknown value 'x86-64' for '-march'" -- so other
+            # architectures take the compiler's own default.
             list(APPEND HPTT_PRIVATE_COMPILE_OPTIONS -march=x86-64 -mtune=generic)
         endif()
     endif()
@@ -82,10 +86,14 @@ if(ENABLE_AVX)
     endif()
     list(APPEND HPTT_PUBLIC_COMPILE_DEFINITIONS HPTT_ARCH_AVX)
 elseif(ENABLE_ARM)
-    # MSVC targeting ARM64 needs no opt-in flag: Advanced SIMD (Neon) is
-    # part of the baseline ISA there, and cl's /arch: only selects newer
-    # extensions.
-    if(NOT MSVC)
+    # `-mfpu=neon` is a GCC/Clang spelling, and it exists only for 32-bit
+    # ARM targets. Both halves of the condition are needed, for separate
+    # reasons: MSVC has no `-mfpu` option on any target, and a 64-bit ARM
+    # target has Advanced SIMD in its baseline ISA with no `-mfpu` to
+    # select it (GCC on aarch64 errors with "unknown value 'neon'").
+    # HPTT_ARCH_ARM below is what actually selects the Neon kernels.
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang"
+       AND NOT CMAKE_SYSTEM_PROCESSOR MATCHES "(aarch64|arm64|ARM64)")
         list(APPEND HPTT_PRIVATE_COMPILE_OPTIONS -mfpu=neon)
     endif()
     list(APPEND HPTT_PUBLIC_COMPILE_DEFINITIONS HPTT_ARCH_ARM)
