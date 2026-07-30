@@ -247,8 +247,8 @@ class Transpose
       void executeEstimate(const Plan *plan) noexcept; // almost identical to execute, but it just executes few iterations and then extrapolates
       double getTimeLimit() const;
 
-      const floatType* __restrict__ A_; //!< rawdata pointer for A
-      floatType* __restrict__ B_; //!< rawdata pointer for B
+      const floatType* HPTT_RESTRICT A_; //!< rawdata pointer for A
+      floatType* HPTT_RESTRICT B_; //!< rawdata pointer for B
       floatType alpha_; //!< scaling factor for A
       floatType beta_; //!< scaling factor for B
       int dim_; //!< dimension of the tensor
