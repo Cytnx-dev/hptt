@@ -7,13 +7,14 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+include(CheckCXXCompilerFlag)
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
 
 option(ENABLE_IBM "Enable IBM POWER architecture support" OFF)
 option(ENABLE_AVX "Enable x86 AVX (REGISTER_BITS=256) support" OFF)
 option(ENABLE_ARM "Enable ARM/Neon (REGISTER_BITS=128) support" OFF)
-option(FINE_TUNE "Fine-tune for the host CPU (uses -march=native; produces non-portable binaries)" OFF)
+option(FINE_TUNE "Fine-tune for the CPU running the build (produces non-portable binaries)" OFF)
 
 # HPTT_INSTALL: ON by default for standalone builds, but a parent project
 # using add_subdirectory() can set it OFF if it doesn't want HPTT to emit
@@ -48,34 +49,94 @@ option(HPTT_BUILD_SHARED "Build the shared HPTT library (hptt_dyn)" ON)
 set(HPTT_PRIVATE_COMPILE_OPTIONS)
 set(HPTT_PUBLIC_COMPILE_DEFINITIONS)
 
-# Per-compiler architecture / optimization flags. OpenMP-specific flags
-# (`-fopenmp`, `-qopenmp`, `-qsmp=omp`, etc.) are intentionally *not* listed
-# here — `find_package(OpenMP)` + the PUBLIC `OpenMP::OpenMP_CXX` link below
-# provides them via the imported target's INTERFACE_COMPILE_OPTIONS, which
-# is per-toolchain-correct (AppleClang in particular often rejects a bare
-# `-fopenmp`).
-if(CMAKE_CXX_COMPILER_ID STREQUAL "Intel")
-    list(APPEND HPTT_PRIVATE_COMPILE_OPTIONS -xhost)
-elseif(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
-    if(APPLE)
-        list(APPEND HPTT_PRIVATE_COMPILE_OPTIONS -mtune=native)
-    elseif(NOT ENABLE_IBM)
-        if(FINE_TUNE)
-            list(APPEND HPTT_PRIVATE_COMPILE_OPTIONS -march=native -mtune=native)
-        elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64|amd64|i[3-6]86)$")
-            # `x86-64` is the baseline x86 -march value. It is not a valid
-            # -march anywhere else -- on aarch64 GCC rejects it outright
-            # with "unknown value 'x86-64' for '-march'" -- so other
-            # architectures take the compiler's own default.
-            list(APPEND HPTT_PRIVATE_COMPILE_OPTIONS -march=x86-64 -mtune=generic)
-        endif()
-    endif()
-elseif(CMAKE_CXX_COMPILER_ID STREQUAL "Clang" OR CMAKE_CXX_COMPILER_ID STREQUAL "AppleClang")
-    if(FINE_TUNE)
-        list(APPEND HPTT_PRIVATE_COMPILE_OPTIONS -march=native)
-    endif()
+# Decided once: the same predicate picks the baseline -march below and the
+# order in which the host-tuning candidates are probed.
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64|amd64|i[3-6]86)$")
+    set(HPTT_TARGET_IS_X86 TRUE)
+else()
+    set(HPTT_TARGET_IS_X86 FALSE)
+endif()
+
+# Per-compiler baseline flags, applied whether or not FINE_TUNE is on.
+# OpenMP-specific flags (`-fopenmp`, `-qopenmp`, `-qsmp=omp`, etc.) are
+# intentionally *not* listed here — `find_package(OpenMP)` + the PUBLIC
+# `OpenMP::OpenMP_CXX` link below provides them via the imported target's
+# INTERFACE_COMPILE_OPTIONS, which is per-toolchain-correct (AppleClang in
+# particular often rejects a bare `-fopenmp`).
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND NOT FINE_TUNE
+   AND NOT APPLE AND NOT ENABLE_IBM AND HPTT_TARGET_IS_X86)
+    # `x86-64` is the baseline x86 -march value. It is not a valid -march
+    # anywhere else -- on aarch64 GCC rejects it outright with "unknown
+    # value 'x86-64' for '-march'" -- so other architectures take the
+    # compiler's own default. FINE_TUNE selects the host CPU instead, so the
+    # two are mutually exclusive.
+    list(APPEND HPTT_PRIVATE_COMPILE_OPTIONS -march=x86-64 -mtune=generic)
 elseif(CMAKE_CXX_COMPILER_ID STREQUAL "PGI")
     list(APPEND HPTT_PRIVATE_COMPILE_OPTIONS -silent -w -Mnovect)
+endif()
+
+# -----------------------------------------------------------------------------
+# FINE_TUNE: target the CPU this build is running on.
+#
+# There is no portable spelling for that, and picking the wrong one either
+# fails the build or does nothing at all:
+#
+#   x86      `-march=native` selects the host ISA and implies
+#            `-mtune=native`. `-mcpu=` must not be offered here: GCC only
+#            warns ("'-mcpu=' is deprecated"), so a probe would accept a flag
+#            that merely sets scheduling, and Clang rejects it outright
+#            ("unsupported option '-mcpu=' for target 'x86_64-...'").
+#   ARM      `-mcpu=native` selects the host ISA *and* its scheduling model,
+#            where `-march=` names only an architecture revision.
+#   POWER    `-mcpu=native`; the target has no `-march=` option at all
+#            ("unsupported option '-march=' for target 'powerpc64le-...'").
+#   ICC/ICX  `-xhost` covers the whole thing under one name.
+#   MSVC     has no equivalent on any architecture: `/arch:` only takes
+#            explicit ISA levels, never the host's.
+#
+# So the target architecture fixes the order candidates are offered in, and a
+# compile probe decides which of them the toolchain in hand actually accepts.
+# A toolchain that accepts none is reported rather than passed over in
+# silence.
+# -----------------------------------------------------------------------------
+if(FINE_TUNE)
+    if(CMAKE_CROSSCOMPILING)
+        message(WARNING
+            "FINE_TUNE=ON while cross-compiling: `native` resolves to the CPU of "
+            "the build machine, not of the target. Name the target CPU through "
+            "CMAKE_CXX_FLAGS instead.")
+    endif()
+
+    if(CMAKE_CXX_COMPILER_ID MATCHES "^Intel")  # Intel (icpc) and IntelLLVM (icpx)
+        set(hptt_host_tune_candidates -xhost)
+    elseif(HPTT_TARGET_IS_X86)
+        set(hptt_host_tune_candidates -march=native)
+    else()
+        set(hptt_host_tune_candidates -mcpu=native -march=native)
+    endif()
+    # Last resort on every target: re-tune scheduling for the host without
+    # touching the instruction set.
+    list(APPEND hptt_host_tune_candidates -mtune=native)
+
+    set(HPTT_HOST_TUNE_FLAG "")
+    foreach(flag IN LISTS hptt_host_tune_candidates)
+        string(MAKE_C_IDENTIFIER "HPTT_CXX_ACCEPTS_${flag}" probe_result)
+        check_cxx_compiler_flag("${flag}" ${probe_result})
+        if(${probe_result})
+            set(HPTT_HOST_TUNE_FLAG "${flag}")
+            break()
+        endif()
+    endforeach()
+
+    if(HPTT_HOST_TUNE_FLAG)
+        message(STATUS "HPTT: fine-tuning for the host CPU with ${HPTT_HOST_TUNE_FLAG}")
+        list(APPEND HPTT_PRIVATE_COMPILE_OPTIONS ${HPTT_HOST_TUNE_FLAG})
+    else()
+        message(WARNING
+            "FINE_TUNE=ON has no effect: ${CMAKE_CXX_COMPILER_ID} accepted none of "
+            "\"${hptt_host_tune_candidates}\" for ${CMAKE_SYSTEM_PROCESSOR}. The "
+            "build continues with the compiler's default target CPU.")
+    endif()
 endif()
 
 if(ENABLE_AVX)
