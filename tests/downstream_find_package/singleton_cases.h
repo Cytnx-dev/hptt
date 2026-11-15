@@ -45,6 +45,19 @@ int singleton_type(const char* label) {
       }
     }
   }
+  // Exact rank-32 review geometry: repeated unit strides previously hid an
+  // invalid cost-matrix order whose terminal axis was neither designated inner axis.
+  Case high_rank{std::vector<int>(32, 1), std::vector<int>(32), std::vector<int>(32, 2), {}};
+  std::iota(high_rank.perm.rbegin(), high_rank.perm.rend(), 0);
+  std::fill_n(high_rank.outer_a.begin(), 16, 1);
+  high_rank.outer_b = high_rank.outer_a;
+  for (bool row_major : {false, true}) {
+    for (int threads : {1, 4}) {
+      for (bool update : {false, true}) {
+        failures += check<T>(label, high_rank, row_major, hptt::ESTIMATE, threads, update);
+      }
+    }
+  }
   return failures;
 }
 
@@ -53,7 +66,7 @@ inline int singleton_cases() {
   failures += singleton_type<double>("singleton double");
   failures += singleton_type<std::complex<float>>("singleton complex float");
   failures += singleton_type<std::complex<double>>("singleton complex double");
-  std::printf("padded singleton axes: %d failures in 768 cases\n", failures);
+  std::printf("padded singleton axes: %d failures in 800 cases\n", failures);
   return failures;
 }
 
