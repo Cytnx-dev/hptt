@@ -130,6 +130,11 @@ Array and `std::vector<int>` overloads support all four scalar types. Existing
 explicit-count overloads remain available and bypass environment selection.
 The C and Python interfaces retain their existing thread-count configuration.
 
+The additional state in `Transpose<T>` changes its C++ binary layout. Rebuild
+HPTT and all C++ consumers together when upgrading; do not mix objects compiled
+with the old headers with the new library. Such a mixture can link successfully
+but silently misbehave through inline accessors such as `setConjA()`.
+
 `execute()` always completes the entire transpose, including when called by a
 nonzero worker in an outer OpenMP region or when OpenMP reduces the inner team.
 It ignores cooperative thread-ID lists. `execute_expert<..., true, ...>()` also
