@@ -9,6 +9,8 @@
 #include <random>
 #include <vector>
 
+#include "loop_order_cases.h"
+
 namespace {
 
 int failures = 0;
@@ -103,6 +105,8 @@ int main() {
                            std::complex<float>(1.0f, 0.0f), std::complex<float>(0.0f, 0.0f), 1, ftol);
   run<std::complex<double>>("cdouble 3D alpha,beta complex", {12, 10, 9}, {2, 1, 0},
                             std::complex<double>(1.5, -0.5), std::complex<double>(0.25, 0.75), 1, dtol);
+
+  failures += padded_test::loop_order_cases();
 
   std::printf("hptt correctness (numThreads=4):\n");
   run<double>("double 2D large {512,256}", {512, 256}, {1, 0}, 1.0, 0.0, 4, dtol);
