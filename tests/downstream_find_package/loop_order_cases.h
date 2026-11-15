@@ -31,6 +31,21 @@ int loop_order_type(const char* label) {
       }
     }
   }
+  // Equal physical volumes select the cost matrix. Keep unit strides unique
+  // so this catches skipped work even without the singleton-axis identity fix.
+  // Ranks 30-33 cross the old signed multiplication and shift boundaries.
+  for (int rank : {29, 30, 31, 32, 33}) {
+    Case test{std::vector<int>(rank, 1), std::vector<int>(rank), std::vector<int>(rank, 2), {}};
+    std::iota(test.perm.rbegin(), test.perm.rend(), 0);
+    std::fill_n(test.outer_a.begin(), rank / 2, 1);
+    test.outer_a[0] = 2;
+    test.outer_b = test.outer_a;
+    for (bool row_major : {false, true}) {
+      for (bool update : {false, true}) {
+        failures += check<T>(label, test, row_major, hptt::ESTIMATE, 1, update);
+      }
+    }
+  }
   return failures;
 }
 
@@ -39,7 +54,7 @@ inline int loop_order_cases() {
   failures += loop_order_type<double>("loop order double");
   failures += loop_order_type<std::complex<float>>("loop order complex float");
   failures += loop_order_type<std::complex<double>>("loop order complex double");
-  std::printf("padded loop orders: %d failures in 1280 cases\n", failures);
+  std::printf("padded loop orders: %d failures in 1360 cases\n", failures);
   return failures;
 }
 
