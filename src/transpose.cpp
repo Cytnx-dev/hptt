@@ -940,33 +940,31 @@ _Pragma("vector nontemporal")
    }
 }
 
-template<typename floatType> 
-template<bool spawnThreads>
-void Transpose<floatType>::getStartEnd(int n, int &myStart, int &myEnd) const
-{
+template <typename floatType>
+template <bool cooperative>
+void Transpose<floatType>::getStartEnd(int n, int &myStart, int &myEnd) const {
+  if (!cooperative) {
+    myStart = 0;
+    myEnd = n;
+    return;
+  }
 #ifdef _OPENMP
-   int myLocalThreadId = getLocalThreadId(omp_get_thread_num());
+  int myLocalThreadId = getLocalThreadId(omp_get_thread_num());
 #else
-   int myLocalThreadId = 0;
+  int myLocalThreadId = 0;
 #endif
 
-   if(myLocalThreadId == -1 ) // skip those threads which do not participate in this plan
-   {
-      myStart = n;
-      myEnd = n;
-      return;
-   }
-   if(spawnThreads){ // worksharing will be handled by the OpenMP runtime
-      myStart = 0;
-      myEnd = n;
-      return;
-   }
+  if (myLocalThreadId == -1)  // skip those threads which do not participate in this plan
+  {
+    myStart = n;
+    myEnd = n;
+    return;
+  }
 
-   const int workPerThread = (n + numThreads_-1)/numThreads_;
-   myStart = std::min(n, myLocalThreadId * workPerThread);
-   myEnd = std::min(n, (myLocalThreadId+1) * workPerThread);
+  const int workPerThread = (n + numThreads_ - 1) / numThreads_;
+  myStart = std::min(n, myLocalThreadId * workPerThread);
+  myEnd = std::min(n, (myLocalThreadId + 1) * workPerThread);
 }
-
 
 template<typename floatType> 
 int Transpose<floatType>::getLocalThreadId(int myThreadId) const
@@ -978,83 +976,90 @@ int Transpose<floatType>::getLocalThreadId(int myThreadId) const
    return myLocalId;
 }
 
-template<typename floatType> 
-template<bool useStreamingStores, bool spawnThreads, bool betaIsZero>
-void Transpose<floatType>::execute_expert() noexcept
-{
-   if( masterPlan_ == nullptr ) {
-      fprintf(stderr,"[HPTT] ERROR: master plan has not yet been created.\n");
-      exit(-1);
-   }
+template <typename floatType>
+template <bool useStreamingStores, bool spawnThreads, bool betaIsZero, bool cooperative>
+void Transpose<floatType>::execute_impl() noexcept {
+  if (masterPlan_ == nullptr) {
+    fprintf(stderr, "[HPTT] ERROR: master plan has not yet been created.\n");
+    exit(-1);
+  }
 
-   int myStart = 0;
-   int myEnd = 0;
+  int myStart = 0;
+  int myEnd = 0;
 
-   if( dim_ == 1)
-   {
-      getStartEnd<spawnThreads>(sizeA_[0], myStart, myEnd);
-      if( conjA_ )
-         axpy_1D<betaIsZero, floatType, useStreamingStores, spawnThreads, true>( A_, B_, myStart, myEnd, alpha_, beta_, numThreads_ );
-      else
-         axpy_1D<betaIsZero, floatType, useStreamingStores, spawnThreads, false>( A_, B_, myStart, myEnd, alpha_, beta_, numThreads_ );
-      return;
-   }
-   else if( dim_ == 2 && perm_[0] == 0)
-   {
-      getStartEnd<spawnThreads>(sizeA_[1], myStart, myEnd);
-      if( conjA_ )
-         axpy_2D<betaIsZero, floatType, useStreamingStores, spawnThreads, true>( A_, lda_[1], B_, ldb_[1], sizeA_[0], myStart, myEnd, alpha_, beta_, numThreads_ );
-      else
-         axpy_2D<betaIsZero, floatType, useStreamingStores, spawnThreads, false>( A_, lda_[1], B_, ldb_[1], sizeA_[0], myStart, myEnd, alpha_, beta_, numThreads_ );
-      return;
-   }
+  if (dim_ == 1) {
+    getStartEnd<cooperative>(sizeA_[0], myStart, myEnd);
+    if (conjA_)
+      axpy_1D<betaIsZero, floatType, useStreamingStores, spawnThreads, true>(
+          A_, B_, myStart, myEnd, alpha_, beta_, numThreads_);
+    else
+      axpy_1D<betaIsZero, floatType, useStreamingStores, spawnThreads, false>(
+          A_, B_, myStart, myEnd, alpha_, beta_, numThreads_);
+    return;
+  } else if (dim_ == 2 && perm_[0] == 0) {
+    getStartEnd<cooperative>(sizeA_[1], myStart, myEnd);
+    if (conjA_)
+      axpy_2D<betaIsZero, floatType, useStreamingStores, spawnThreads, true>(
+          A_, lda_[1], B_, ldb_[1], sizeA_[0], myStart, myEnd, alpha_, beta_, numThreads_);
+    else
+      axpy_2D<betaIsZero, floatType, useStreamingStores, spawnThreads, false>(
+          A_, lda_[1], B_, ldb_[1], sizeA_[0], myStart, myEnd, alpha_, beta_, numThreads_);
+    return;
+  }
 
-   const int numTasks = masterPlan_->getNumTasks();
-   const int numThreads = numThreads_;
-   getStartEnd<spawnThreads>(numTasks, myStart, myEnd);
+  const int numTasks = masterPlan_->getNumTasks();
+  const int numThreads = numThreads_;
+  getStartEnd<cooperative>(numTasks, myStart, myEnd);
 
-   HPTT_DUPLICATE(spawnThreads,
-      for( int taskId = myStart; taskId < myEnd; taskId++)
-         if ( perm_[0] != 0 ) {
-            auto rootNode = masterPlan_->getRootNode_const( taskId );
-            if( conjA_ )
-               transpose_int<blocking_,blocking_,betaIsZero,floatType, useStreamingStores, true>( A_, A_, B_, B_, alpha_, beta_, rootNode);
-            else
-               transpose_int<blocking_,blocking_,betaIsZero,floatType, useStreamingStores, false>( A_, A_, B_, B_, alpha_, beta_, rootNode);
-         } else {
-            auto rootNode = masterPlan_->getRootNode_const( taskId );
-            if( conjA_ )
-               transpose_int_constStride1<betaIsZero,floatType, useStreamingStores, true>( A_, B_, alpha_, beta_, rootNode);
-            else
-               transpose_int_constStride1<betaIsZero,floatType, useStreamingStores, false>( A_, B_, alpha_, beta_, rootNode);
-         }
-   )
+  HPTT_DUPLICATE(
+      spawnThreads,
+      for (int taskId = myStart; taskId < myEnd; taskId++) if (perm_[0] != 0) {
+        auto rootNode = masterPlan_->getRootNode_const(taskId);
+        if (conjA_)
+          transpose_int<blocking_, blocking_, betaIsZero, floatType, useStreamingStores, true>(
+              A_, A_, B_, B_, alpha_, beta_, rootNode);
+        else
+          transpose_int<blocking_, blocking_, betaIsZero, floatType, useStreamingStores, false>(
+              A_, A_, B_, B_, alpha_, beta_, rootNode);
+      } else {
+        auto rootNode = masterPlan_->getRootNode_const(taskId);
+        if (conjA_)
+          transpose_int_constStride1<betaIsZero, floatType, useStreamingStores, true>(
+              A_, B_, alpha_, beta_, rootNode);
+        else
+          transpose_int_constStride1<betaIsZero, floatType, useStreamingStores, false>(
+              A_, B_, alpha_, beta_, rootNode);
+      })
 }
-template<typename floatType> 
-void Transpose<floatType>::execute() noexcept
-{
-   if( masterPlan_ == nullptr ) {
-      fprintf(stderr,"[HPTT] ERROR: master plan has not yet been created.\n");
-      exit(-1);
-   }
+template <typename floatType>
+template <bool useStreamingStores, bool spawnThreads, bool betaIsZero>
+void Transpose<floatType>::execute_expert() noexcept {
+  this->execute_impl<useStreamingStores, spawnThreads, betaIsZero, !spawnThreads>();
+}
 
-   bool spawnThreads = numThreads_ > 1;
-   bool betaIsZero = (beta_ == (floatType) 0.0);
-   constexpr bool useStreamingStores = true;
-   if( spawnThreads )
-   {
-      if( betaIsZero) {
-         this->execute_expert<useStreamingStores, true, true>();
-      } else {
-         this->execute_expert<useStreamingStores, true, false>();
-      }
-   } else {
-      if( betaIsZero) {
-         this->execute_expert<useStreamingStores, false, true>();
-      } else {
-         this->execute_expert<useStreamingStores, false, false>();
-      }
-   }
+template <typename floatType>
+void Transpose<floatType>::execute() noexcept {
+  if (masterPlan_ == nullptr) {
+    fprintf(stderr, "[HPTT] ERROR: master plan has not yet been created.\n");
+    exit(-1);
+  }
+
+  bool spawnThreads = numThreads_ > 1;
+  bool betaIsZero = (beta_ == (floatType)0.0);
+  constexpr bool useStreamingStores = true;
+  if (spawnThreads) {
+    if (betaIsZero) {
+      this->execute_impl<useStreamingStores, true, true, false>();
+    } else {
+      this->execute_impl<useStreamingStores, true, false, false>();
+    }
+  } else {
+    if (betaIsZero) {
+      this->execute_impl<useStreamingStores, false, true, false>();
+    } else {
+      this->execute_impl<useStreamingStores, false, false, false>();
+    }
+  }
 }
 
 template<typename floatType> 

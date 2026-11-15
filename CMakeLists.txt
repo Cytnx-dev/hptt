@@ -400,3 +400,44 @@ if(HPTT_INSTALL)
     # ~/.cmake/packages on CI machines.
     export(PACKAGE hptt)
 endif()
+
+option(HPTT_BUILD_TESTS "Build HPTT regression tests" OFF)
+if(HPTT_BUILD_TESTS)
+    enable_testing()
+    add_executable(hptt_threading_test tests/threading_test.cpp)
+    target_link_libraries(hptt_threading_test PRIVATE hptt::hptt_static)
+    foreach(mode IN ITEMS serialized nested limited)
+        add_test(NAME threading_${mode} COMMAND hptt_threading_test)
+        set_tests_properties(threading_${mode} PROPERTIES
+            ENVIRONMENT "OMP_NUM_THREADS=1;OMP_DYNAMIC=FALSE;OMP_THREAD_LIMIT=16;OMP_MAX_ACTIVE_LEVELS=2")
+    endforeach()
+    set_tests_properties(threading_serialized PROPERTIES
+        ENVIRONMENT "OMP_NUM_THREADS=1;OMP_DYNAMIC=FALSE;OMP_THREAD_LIMIT=16;OMP_MAX_ACTIVE_LEVELS=1")
+    set_tests_properties(threading_limited PROPERTIES
+        ENVIRONMENT "OMP_NUM_THREADS=1;OMP_DYNAMIC=FALSE;OMP_THREAD_LIMIT=4;OMP_MAX_ACTIVE_LEVELS=2")
+
+    add_executable(hptt_environment_test tests/environment_test.cpp)
+    target_link_libraries(hptt_environment_test PRIVATE hptt::hptt_static)
+    function(hptt_environment_case name expected)
+        add_test(NAME environment_${name}
+            COMMAND ${CMAKE_COMMAND} -E env --unset=HPTT_NUM_THREADS --unset=OMP_NUM_THREADS
+                OMP_THREAD_LIMIT=16 OMP_MAX_ACTIVE_LEVELS=1 ${ARGN}
+                $<TARGET_FILE:hptt_environment_test> ${expected})
+    endfunction()
+    hptt_environment_case(default 1)
+    hptt_environment_case(omp 4 OMP_NUM_THREADS=4)
+    hptt_environment_case(omp_list 2 OMP_NUM_THREADS=2,1)
+    hptt_environment_case(hptt 3 HPTT_NUM_THREADS=3)
+    hptt_environment_case(precedence 2 HPTT_NUM_THREADS=2 OMP_NUM_THREADS=4)
+    hptt_environment_case(whitespace 2 "HPTT_NUM_THREADS= 2 ")
+    hptt_environment_case(omp_whitespace 2 "OMP_NUM_THREADS= 2 , 1 ")
+    hptt_environment_case(zero HPTT_NUM_THREADS HPTT_NUM_THREADS=0 OMP_NUM_THREADS=2)
+    hptt_environment_case(negative HPTT_NUM_THREADS HPTT_NUM_THREADS=-1)
+    hptt_environment_case(empty HPTT_NUM_THREADS HPTT_NUM_THREADS=)
+    hptt_environment_case(junk HPTT_NUM_THREADS HPTT_NUM_THREADS=2x)
+    hptt_environment_case(hptt_list HPTT_NUM_THREADS HPTT_NUM_THREADS=2,1)
+    hptt_environment_case(int_overflow HPTT_NUM_THREADS HPTT_NUM_THREADS=2147483648)
+    hptt_environment_case(long_overflow HPTT_NUM_THREADS HPTT_NUM_THREADS=999999999999999999999999)
+    hptt_environment_case(omp_trailing_comma OMP_NUM_THREADS OMP_NUM_THREADS=2,)
+    hptt_environment_case(omp_bad_tail OMP_NUM_THREADS OMP_NUM_THREADS=2,0)
+endif()

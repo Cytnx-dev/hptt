@@ -81,7 +81,7 @@ In general HPTT is used as follows:
     auto plan = hptt::create_plan( perm, dim, 
                                    alpha, A, size, NULL, 
                                    beta,  B, NULL, 
-                                   hptt::ESTIMATE, numThreads);
+                                   hptt::ESTIMATE);
 
     // execute the transposition
     plan->execute();
@@ -89,6 +89,48 @@ In general HPTT is used as follows:
 The example above does not use any auto-tuning, but solely relies on HPTT's
 performance model. To active auto-tuning, please use hptt::MEASURE, or
 hptt::PATIENT instead of hptt::ESTIMATE.
+
+
+## Automatic threading (C++)
+
+The `create_plan` overloads without a thread count select it when the plan is
+created, using the first environment variable that is present:
+
+1. `HPTT_NUM_THREADS`: a positive integer.
+2. `OMP_NUM_THREADS`: a positive integer or comma-separated list; the first
+   entry supplies the count, and every entry must be valid.
+3. Otherwise, one thread.
+
+Empty, malformed, zero, negative, and out-of-range selected values throw
+`std::invalid_argument`. An invalid `HPTT_NUM_THREADS` does not silently fall
+back to `OMP_NUM_THREADS`. These defaults are read for each new plan; existing
+plans retain their count. `omp_set_num_threads()` does not override this policy.
+OpenMP still controls dynamic teams, nesting, and thread limits, so the actual
+team can be smaller than the requested count. The list's later entries do not
+change HPTT's captured count when a plan executes inside a nested region.
+
+Column-major storage is the default. For row-major storage, use the named layout:
+
+```cpp
+auto plan = hptt::create_plan(perm, dim, alpha, A, size, nullptr,
+                              beta, B, nullptr, hptt::ESTIMATE,
+                              hptt::Layout::RowMajor);
+plan->execute();
+```
+
+Array and `std::vector<int>` overloads support all four scalar types. Existing
+explicit-count overloads remain available and bypass environment selection.
+The C and Python interfaces retain their existing thread-count configuration.
+
+`execute()` always completes the entire transpose, including when called by a
+nonzero worker in an outer OpenMP region or when OpenMP reduces the inner team.
+It ignores cooperative thread-ID lists. `execute_expert<..., true, ...>()` also
+executes a complete operation. Only `execute_expert<..., false, ...>()` partitions
+work among the specified participating threads; all configured participants
+must call it. Concurrent independent operations need distinct output buffers.
+
+To run the C++ regressions, configure with `-DHPTT_BUILD_TESTS=ON`, build, and run
+`ctest --test-dir <build-directory> --output-on-failure`.
 
 
 ## C-Interface

@@ -147,12 +147,16 @@ jobs:
           cmake -S . -B "$BUILD_DIR" -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_INSTALL_PREFIX="$INSTALL_DIR" \
+            -DHPTT_BUILD_TESTS=ON \
             -DCMAKE_C_COMPILER_LAUNCHER=ccache \
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
             "${EXTRA[@]}"
 
       - name: Build HPTT
         run: cmake --build "$BUILD_DIR"
+
+      - name: Test HPTT threading
+        run: ctest --test-dir "$BUILD_DIR" --output-on-failure
 
       # HPTT ships as a binary, so a default build must carry nothing specific to
       # the machine that built it -- a `native`-tuned artifact can fault on a

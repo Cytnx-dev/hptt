@@ -150,6 +150,80 @@
 
 namespace hptt {
 
+/** Memory layout for the automatic-threading create_plan overloads. */
+enum class Layout { ColumnMajor, RowMajor };
+
+/**
+ * Create a plan without specifying thread counts or participating thread IDs.
+ * The count is captured at plan creation from HPTT_NUM_THREADS, otherwise the
+ * first entry of OMP_NUM_THREADS, otherwise 1. Values must be positive integers;
+ * OMP_NUM_THREADS may contain a comma-separated list. Invalid selected values
+ * throw std::invalid_argument. Explicit-count overloads ignore the environment.
+ *
+ * Selection reads the environment only; omp_set_num_threads() is not consulted.
+ * Existing plans retain their count across environment changes. OpenMP controls
+ * nesting, dynamic teams, and thread limits during execution.
+ * Ordinary execute() always completes the full transpose on any calling thread.
+ * Thread participation lists apply only to cooperative execute_expert calls.
+ */
+std::shared_ptr<Transpose<float>> create_plan(const int *perm, int dim, float alpha,
+                                              const float *input, const int *size,
+                                              const int *outer_size_input, float beta,
+                                              float *output, const int *outer_size_output,
+                                              SelectionMethod selection_method,
+                                              Layout layout = Layout::ColumnMajor);
+
+std::shared_ptr<Transpose<double>> create_plan(const int *perm, int dim, double alpha,
+                                               const double *input, const int *size,
+                                               const int *outer_size_input, double beta,
+                                               double *output, const int *outer_size_output,
+                                               SelectionMethod selection_method,
+                                               Layout layout = Layout::ColumnMajor);
+
+std::shared_ptr<Transpose<FloatComplex>> create_plan(const int *perm, int dim, FloatComplex alpha,
+                                                     const FloatComplex *input, const int *size,
+                                                     const int *outer_size_input, FloatComplex beta,
+                                                     FloatComplex *output,
+                                                     const int *outer_size_output,
+                                                     SelectionMethod selection_method,
+                                                     Layout layout = Layout::ColumnMajor);
+
+std::shared_ptr<Transpose<DoubleComplex>> create_plan(const int *perm, int dim, DoubleComplex alpha,
+                                                      const DoubleComplex *input, const int *size,
+                                                      const int *outer_size_input,
+                                                      DoubleComplex beta, DoubleComplex *output,
+                                                      const int *outer_size_output,
+                                                      SelectionMethod selection_method,
+                                                      Layout layout = Layout::ColumnMajor);
+
+std::shared_ptr<Transpose<float>> create_plan(const std::vector<int> &perm, int dim, float alpha,
+                                              const float *input, const std::vector<int> &size,
+                                              const std::vector<int> &outer_size_input, float beta,
+                                              float *output,
+                                              const std::vector<int> &outer_size_output,
+                                              SelectionMethod selection_method,
+                                              Layout layout = Layout::ColumnMajor);
+
+std::shared_ptr<Transpose<double>> create_plan(const std::vector<int> &perm, int dim, double alpha,
+                                               const double *input, const std::vector<int> &size,
+                                               const std::vector<int> &outer_size_input,
+                                               double beta, double *output,
+                                               const std::vector<int> &outer_size_output,
+                                               SelectionMethod selection_method,
+                                               Layout layout = Layout::ColumnMajor);
+
+std::shared_ptr<Transpose<FloatComplex>> create_plan(
+    const std::vector<int> &perm, int dim, FloatComplex alpha, const FloatComplex *input,
+    const std::vector<int> &size, const std::vector<int> &outer_size_input, FloatComplex beta,
+    FloatComplex *output, const std::vector<int> &outer_size_output,
+    SelectionMethod selection_method, Layout layout = Layout::ColumnMajor);
+
+std::shared_ptr<Transpose<DoubleComplex>> create_plan(
+    const std::vector<int> &perm, int dim, DoubleComplex alpha, const DoubleComplex *input,
+    const std::vector<int> &size, const std::vector<int> &outer_size_input, DoubleComplex beta,
+    DoubleComplex *output, const std::vector<int> &outer_size_output,
+    SelectionMethod selection_method, Layout layout = Layout::ColumnMajor);
+
 /**
  * \brief Creates a Tensor Transposition plan 
  *

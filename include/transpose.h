@@ -190,7 +190,9 @@ class Transpose
        * \param[in] spawnThreads If the variable is set, the threads will be
        *                         spawned from within this call, otherwise it is
        *                         expected that this function call executes from
-       *                         within a parallel region.
+       *                         within a parallel region. Only this cooperative
+       *                         mode uses the plan's participating thread IDs;
+       *                         callers must supply all configured participants.
        * \param[in] betaIsZero   Only set this variable if beta is zero.
        */
       template<bool useStreamingStores=true, bool spawnThreads=true, bool betaIsZero>
@@ -198,7 +200,9 @@ class Transpose
 
       /**
        * Executes the transposition. This functions requires that the plan has
-       * already been created via the createPlan() function.
+       * already been created via the createPlan() function. The calling thread
+       * always executes the complete plan; cooperative threadIds are ignored.
+       * The OpenMP runtime may use fewer workers than the plan requested.
        */
       void execute() noexcept;
 
@@ -215,8 +219,10 @@ class Transpose
       void computeLeadingDimensions();
       double loopCostHeuristic( const std::vector<int> &loopOrder ) const;
       double parallelismCostHeuristic( const std::vector<int> &loopOrder ) const;
+      template<bool useStreamingStores, bool spawnThreads, bool betaIsZero, bool cooperative>
+      void execute_impl() noexcept;
       int getLocalThreadId(int myThreadId) const;
-      template<bool spawnThreads>
+      template<bool cooperative>
       void getStartEnd(int n, int &myStart, int &myEnd) const;
       void setParallelStrategy(int id) noexcept { selectedParallelStrategyId_ = id; }
       void setLoopOrder(int id) noexcept { selectedLoopOrderId_ = id; }
