@@ -3,6 +3,8 @@
 // types, several dimensionalities/permutations, and beta != 0.
 #include <hptt.h>
 
+#include "singleton_cases.h"
+
 #include <algorithm>
 #include <complex>
 #include <cstdio>
@@ -90,6 +92,7 @@ void run(const char *label, const std::vector<int> &sizeA, const std::vector<int
 
 int main() {
   const double ftol = 1e-4, dtol = 1e-12;
+  failures += padded_test::singleton_cases();
 
   std::printf("hptt correctness (numThreads=1):\n");
   run<float>("float  2D {64,32} perm{1,0}", {64, 32}, {1, 0}, 1.0f, 0.0f, 1, ftol);
