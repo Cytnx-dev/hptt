@@ -31,6 +31,20 @@ int singleton_type(const char* label) {
       }
     }
   }
+  // Review regression: the old planner ended on an ordinary singleton axis
+  // whose repeated output unit stride happened to hide the invalid loop order.
+  const Case terminal_axis{{2, 1, 1}, {1, 2, 0}, {3, 2, 1}, {1, 2, 4}};
+  for (bool row_major : {false, true}) {
+    for (int threads : {1, 4}) {
+      for (bool update : {false, true}) {
+        for (auto method : {hptt::ESTIMATE, hptt::MEASURE, hptt::PATIENT, hptt::CRAZY}) {
+          failures += check<T>(label, terminal_axis, row_major, method, threads, update);
+          failures +=
+              check<T>(label, inverse_case(terminal_axis), row_major, method, threads, update);
+        }
+      }
+    }
+  }
   return failures;
 }
 
@@ -39,7 +53,7 @@ inline int singleton_cases() {
   failures += singleton_type<double>("singleton double");
   failures += singleton_type<std::complex<float>>("singleton complex float");
   failures += singleton_type<std::complex<double>>("singleton complex double");
-  std::printf("padded singleton axes: %d failures in 512 cases\n", failures);
+  std::printf("padded singleton axes: %d failures in 768 cases\n", failures);
   return failures;
 }
 

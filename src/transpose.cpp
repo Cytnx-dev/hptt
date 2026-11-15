@@ -1724,7 +1724,7 @@ void Transpose<floatType>::getBestLoopOrder( std::vector<int> &loopOrder ) const
    {
       // prefer accesses to B over those to A (Rationale: reduce TLB misses)
       for(int i=0;i < dim_ ; ++i) 
-         loopOrder[dim_-1-i] = dim_-1-i; //innermost loop idx is stored at dim_-1
+         loopOrder[dim_-1-i] = perm_[i]; // output stride-one axis must be innermost
       return;
    }
 
@@ -1831,8 +1831,9 @@ void Transpose<floatType>::getLoopOrders(std::vector<std::vector<int> > &loopOrd
 
    // create all loopOrders
    do {
-      if ( perm_[0] == 0 && loopOrder[dim_-1] != 0 )
-         continue; // ATTENTION: we skip all loop-orders where the stride-1 index is not the inner-most loop iff perm[0] == 0 (both for perf & correctness)
+      // Scalar remainder kernels require one of the two transposed axes innermost.
+      if ( loopOrder[dim_-1] != 0 && loopOrder[dim_-1] != perm_[0] )
+         continue;
 
       loopOrders.push_back(loopOrder);
    } while(std::next_permutation(loopOrder.begin(), loopOrder.end()));
