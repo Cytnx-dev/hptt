@@ -12,6 +12,7 @@
 #include <iostream>
 #include <cmath>
 #include <chrono>
+#include <stdexcept>
 
 #include <float.h>
 #include <stdio.h>
@@ -30,6 +31,16 @@
 #include "../include/transpose.h"
 
 namespace hptt {
+
+namespace {
+int openmp_thread_count() noexcept {
+#ifdef _OPENMP
+   return omp_get_max_threads();
+#else
+   return 1;
+#endif
+}
+}  // namespace
 
 template <typename floatType, int betaIsZero, bool conjA>
 struct micro_kernel
@@ -741,7 +752,8 @@ void transpose_int_constStride1( const floatType* HPTT_RESTRICT A, floatType* HP
          alpha_(alpha),
          beta_(beta),
          dim_(-1),
-         numThreads_(numThreads), 
+         numThreads_(numThreads == 0 ? openmp_thread_count() : numThreads),
+         use_openmp_defaults(numThreads == 0),
          masterPlan_(nullptr),
          selectionMethod_(selectionMethod),
          maxAutotuningCandidates_(-1),
@@ -749,6 +761,8 @@ void transpose_int_constStride1( const floatType* HPTT_RESTRICT A, floatType* HP
          selectedLoopOrderId_(-1),
          conjA_(false)
       {
+         if (use_openmp_defaults && threadIds != nullptr)
+            throw std::invalid_argument("Cooperative thread IDs require an explicit thread count");
 #ifdef _OPENMP
          omp_init_lock(&writelock);
 #endif
@@ -774,7 +788,7 @@ void transpose_int_constStride1( const floatType* HPTT_RESTRICT A, floatType* HP
                threadIds_.push_back(threadIds[i]);
             std::sort(threadIds_.begin(), threadIds_.end());
          }else{
-            for(int i=0; i < numThreads; ++i)
+            for(int i=0; i < numThreads_; ++i)
                threadIds_.push_back(i);
          }
 
@@ -797,6 +811,7 @@ void transpose_int_constStride1( const floatType* HPTT_RESTRICT A, floatType* HP
                                           beta_(other.beta_),
                                           dim_(other.dim_),
                                           numThreads_(other.numThreads_),
+                                          use_openmp_defaults(other.use_openmp_defaults),
                                           masterPlan_(other.masterPlan_),
                                           selectionMethod_(other.selectionMethod_),
                                           selectedParallelStrategyId_(other.selectedParallelStrategyId_),
@@ -834,8 +849,9 @@ void Transpose<floatType>::executeEstimate(const Plan *plan) noexcept
    constexpr bool useStreamingStores = false;
 
    const int numTasks = plan->getNumTasks();
+   const int execution_threads = getNumThreads();
 #ifdef _OPENMP
-#pragma omp parallel for num_threads(numThreads_)  if(numThreads_ > 1)
+#pragma omp parallel for num_threads(execution_threads) if(execution_threads > 1)
 #endif
    for( int taskId = 0; taskId < numTasks; taskId++)
       if ( perm_[0] != 0 ) {
@@ -977,8 +993,13 @@ int Transpose<floatType>::getLocalThreadId(int myThreadId) const
 }
 
 template <typename floatType>
+int Transpose<floatType>::getNumThreads() const noexcept {
+  return use_openmp_defaults ? openmp_thread_count() : numThreads_;
+}
+
+template <typename floatType>
 template <bool useStreamingStores, bool spawnThreads, bool betaIsZero, bool cooperative>
-void Transpose<floatType>::execute_impl() noexcept {
+void Transpose<floatType>::execute_impl(int execution_threads) noexcept {
   if (masterPlan_ == nullptr) {
     fprintf(stderr, "[HPTT] ERROR: master plan has not yet been created.\n");
     exit(-1);
@@ -991,24 +1012,24 @@ void Transpose<floatType>::execute_impl() noexcept {
     getStartEnd<cooperative>(sizeA_[0], myStart, myEnd);
     if (conjA_)
       axpy_1D<betaIsZero, floatType, useStreamingStores, spawnThreads, true>(
-          A_, B_, myStart, myEnd, alpha_, beta_, numThreads_);
+          A_, B_, myStart, myEnd, alpha_, beta_, execution_threads);
     else
       axpy_1D<betaIsZero, floatType, useStreamingStores, spawnThreads, false>(
-          A_, B_, myStart, myEnd, alpha_, beta_, numThreads_);
+          A_, B_, myStart, myEnd, alpha_, beta_, execution_threads);
     return;
   } else if (dim_ == 2 && perm_[0] == 0) {
     getStartEnd<cooperative>(sizeA_[1], myStart, myEnd);
     if (conjA_)
       axpy_2D<betaIsZero, floatType, useStreamingStores, spawnThreads, true>(
-          A_, lda_[1], B_, ldb_[1], sizeA_[0], myStart, myEnd, alpha_, beta_, numThreads_);
+          A_, lda_[1], B_, ldb_[1], sizeA_[0], myStart, myEnd, alpha_, beta_, execution_threads);
     else
       axpy_2D<betaIsZero, floatType, useStreamingStores, spawnThreads, false>(
-          A_, lda_[1], B_, ldb_[1], sizeA_[0], myStart, myEnd, alpha_, beta_, numThreads_);
+          A_, lda_[1], B_, ldb_[1], sizeA_[0], myStart, myEnd, alpha_, beta_, execution_threads);
     return;
   }
 
   const int numTasks = masterPlan_->getNumTasks();
-  const int numThreads = numThreads_;
+  const int numThreads = execution_threads;
   getStartEnd<cooperative>(numTasks, myStart, myEnd);
 
   HPTT_DUPLICATE(
@@ -1034,7 +1055,12 @@ void Transpose<floatType>::execute_impl() noexcept {
 template <typename floatType>
 template <bool useStreamingStores, bool spawnThreads, bool betaIsZero>
 void Transpose<floatType>::execute_expert() noexcept {
-  this->execute_impl<useStreamingStores, spawnThreads, betaIsZero, !spawnThreads>();
+  if (!spawnThreads && use_openmp_defaults) {
+    fprintf(stderr, "[HPTT] ERROR: cooperative execution requires an explicit thread count.\n");
+    exit(-1);
+  }
+  const int execution_threads = spawnThreads ? getNumThreads() : numThreads_;
+  this->execute_impl<useStreamingStores, spawnThreads, betaIsZero, !spawnThreads>(execution_threads);
 }
 
 template <typename floatType>
@@ -1044,20 +1070,21 @@ void Transpose<floatType>::execute() noexcept {
     exit(-1);
   }
 
-  bool spawnThreads = numThreads_ > 1;
+  const int execution_threads = getNumThreads();
+  bool spawnThreads = execution_threads > 1;
   bool betaIsZero = (beta_ == (floatType)0.0);
   constexpr bool useStreamingStores = true;
   if (spawnThreads) {
     if (betaIsZero) {
-      this->execute_impl<useStreamingStores, true, true, false>();
+      this->execute_impl<useStreamingStores, true, true, false>(execution_threads);
     } else {
-      this->execute_impl<useStreamingStores, true, false, false>();
+      this->execute_impl<useStreamingStores, true, false, false>(execution_threads);
     }
   } else {
     if (betaIsZero) {
-      this->execute_impl<useStreamingStores, false, true, false>();
+      this->execute_impl<useStreamingStores, false, true, false>(execution_threads);
     } else {
-      this->execute_impl<useStreamingStores, false, false, false>();
+      this->execute_impl<useStreamingStores, false, false, false>(execution_threads);
     }
   }
 }
@@ -1939,8 +1966,9 @@ void Transpose<floatType>::createPlans( std::vector<std::shared_ptr<Plan> > &pla
             auto plan = std::make_shared<Plan>(loopOrder, numThreadsAtLoop );
             const int numTasks = plan->getNumTasks();
 
+            const int planning_threads = getNumThreads();
 #ifdef _OPENMP
-#pragma omp parallel for num_threads(numThreads_) if(numThreads_ > 1)
+#pragma omp parallel for num_threads(planning_threads) if(planning_threads > 1)
 #endif
             for( int taskId = 0; taskId < numTasks; taskId++)
             {

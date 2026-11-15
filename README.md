@@ -93,21 +93,29 @@ hptt::PATIENT instead of hptt::ESTIMATE.
 
 ## Automatic threading (C++)
 
-The `create_plan` overloads without a thread count select it when the plan is
-created, using the first environment variable that is present:
+The `create_plan` overloads without a thread count follow OpenMP's current
+configuration when the plan executes. HPTT asks the runtime for the calling
+task's requested count; it does not parse `OMP_NUM_THREADS` itself. For example,
+`OMP_NUM_THREADS=4,1` requests four workers at the first parallel level and one
+at the next. Later `omp_set_num_threads()` calls take effect on subsequent
+executions, including when a plan is reused in another parallel context.
+With no environment settings, OpenMP's implementation-defined default applies.
 
-1. `HPTT_NUM_THREADS`: a positive integer.
-2. `OMP_NUM_THREADS`: a positive integer or comma-separated list; the first
-   entry supplies the count, and every entry must be valid.
-3. Otherwise, one thread.
+`HPTT_NUM_THREADS` provides an explicit override, captured at plan creation.
+It must be a positive integer; empty, malformed, zero, negative, or out-of-range
+values throw `std::invalid_argument`. Set `HPTT_NUM_THREADS=1` for single-threaded
+HPTT operations independently of OpenMP's default. The existing explicit-count
+factory overloads take precedence over this environment variable.
 
-Empty, malformed, zero, negative, and out-of-range selected values throw
-`std::invalid_argument`. An invalid `HPTT_NUM_THREADS` does not silently fall
-back to `OMP_NUM_THREADS`. These defaults are read for each new plan; existing
-plans retain their count. `omp_set_num_threads()` does not override this policy.
-OpenMP still controls dynamic teams, nesting, and thread limits, so the actual
-team can be smaller than the requested count. The list's later entries do not
-change HPTT's captured count when a plan executes inside a nested region.
+Planning uses the requested count at construction to decompose the work. That
+decomposition stays fixed, while each execution distributes all work items
+across the selected team. Changing contexts or runtime settings does not mutate
+or rebuild the plan. OpenMP's nesting, dynamic-team and thread-limit controls
+still apply, so the actual team can be smaller than the requested count.
+`getNumThreads()` reports the request in the current context, not the actual
+team size. `setNumThreads(n)` selects a positive fixed override; passing zero
+restores automatic OpenMP selection. A zero count in the legacy C++ factory or
+constructor also selects this mode and must not be combined with a thread-ID list.
 
 Column-major storage is the default. For row-major storage, use the named layout:
 
@@ -126,8 +134,9 @@ The C and Python interfaces retain their existing thread-count configuration.
 nonzero worker in an outer OpenMP region or when OpenMP reduces the inner team.
 It ignores cooperative thread-ID lists. `execute_expert<..., true, ...>()` also
 executes a complete operation. Only `execute_expert<..., false, ...>()` partitions
-work among the specified participating threads; all configured participants
-must call it. Concurrent independent operations need distinct output buffers.
+work among the specified participating threads; it requires an explicit
+thread count and all configured participants must call it. Concurrent independent
+operations need distinct output buffers.
 
 To run the C++ regressions, configure with `-DHPTT_BUILD_TESTS=ON`, build, and run
 `ctest --test-dir <build-directory> --output-on-failure`.

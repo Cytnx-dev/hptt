@@ -70,7 +70,7 @@ int check_explicit_override() {
   return failures;
 }
 
-int check_plan_reuse(int expected_threads) {
+int check_plan_reuse(int expected_threads, bool runtime_mode) {
   const int shape[] = {3, 5}, permutation[] = {1, 0};
   std::vector<double> input(15, 2), output(15, -1);
   auto plan = hptt::create_plan(permutation, 2, 1.0, input.data(), shape, nullptr, 0.0,
@@ -82,8 +82,15 @@ int check_plan_reuse(int expected_threads) {
 #endif
   auto next = hptt::create_plan(permutation, 2, 1.0, input.data(), shape, nullptr, 0.0,
                                 output.data(), nullptr, hptt::ESTIMATE);
+  omp_set_num_threads(2);
   plan->execute();
-  int failures = plan->getNumThreads() != expected_threads || next->getNumThreads() != 3;
+  const int expected_after_change = runtime_mode ? 2 : expected_threads;
+  int failures = plan->getNumThreads() != expected_after_change || next->getNumThreads() != 3;
+  // An explicit override can be selected and subsequently released on a plan.
+  plan->setNumThreads(1);
+  failures += plan->getNumThreads() != 1;
+  plan->setNumThreads(0);
+  failures += plan->getNumThreads() != 2;
   for (double value : output) failures += value != 2;
   return failures;
 }
@@ -92,11 +99,11 @@ int check_plan_reuse(int expected_threads) {
 int main(int argc, char** argv) {
   if (argc != 2) return 1;
   omp_set_dynamic(0);
-  omp_set_num_threads(7);  // The documented defaults are environment-based.
+  omp_set_num_threads(7);  // Runtime changes override OMP_NUM_THREADS, but not HPTT_NUM_THREADS.
   const std::string expected = argv[1];
   try {
     if (check_explicit_override()) return 1;
-    if (expected == "HPTT_NUM_THREADS" || expected == "OMP_NUM_THREADS") {
+    if (expected == "HPTT_NUM_THREADS") {
       try {
         check_type<double>(1);
       } catch (const std::invalid_argument& error) {
@@ -105,11 +112,12 @@ int main(int argc, char** argv) {
       std::cerr << "Invalid environment was accepted\n";
       return 1;
     }
-    const int threads = std::stoi(expected);
+    const bool runtime_mode = expected == "runtime";
+    const int threads = runtime_mode ? 7 : std::stoi(expected);
     int failures = check_type<float>(threads) + check_type<double>(threads) +
                    check_type<hptt::FloatComplex>(threads) +
                    check_type<hptt::DoubleComplex>(threads);
-    failures += check_plan_reuse(threads);
+    failures += check_plan_reuse(threads, runtime_mode);
     if (failures) std::cerr << failures << " environment checks failed\n";
     return failures ? 1 : 0;
   } catch (const std::exception& error) {

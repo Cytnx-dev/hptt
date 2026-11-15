@@ -155,16 +155,17 @@ enum class Layout { ColumnMajor, RowMajor };
 
 /**
  * Create a plan without specifying thread counts or participating thread IDs.
- * The count is captured at plan creation from HPTT_NUM_THREADS, otherwise the
- * first entry of OMP_NUM_THREADS, otherwise 1. Values must be positive integers;
- * OMP_NUM_THREADS may contain a comma-separated list. Invalid selected values
- * throw std::invalid_argument. Explicit-count overloads ignore the environment.
+ * HPTT_NUM_THREADS, if present, selects a positive explicit count at creation;
+ * invalid values throw std::invalid_argument. Otherwise OpenMP selects the
+ * requested count in the calling task at each execution. This honors nested
+ * OMP_NUM_THREADS lists and omp_set_num_threads(), including for reused plans.
+ * HPTT does not parse OMP_NUM_THREADS or override the runtime's default count.
  *
- * Selection reads the environment only; omp_set_num_threads() is not consulted.
- * Existing plans retain their count across environment changes. OpenMP controls
- * nesting, dynamic teams, and thread limits during execution.
- * Ordinary execute() always completes the full transpose on any calling thread.
- * Thread participation lists apply only to cooperative execute_expert calls.
+ * The planning decomposition is retained when the execution count changes.
+ * getNumThreads() reports the current requested count, not an actual team size;
+ * OpenMP still controls dynamic teams, nesting, and thread limits.
+ * Ordinary execute() completes the full transpose on any calling thread.
+ * Cooperative execute_expert calls require an explicit count and participants.
  */
 std::shared_ptr<Transpose<float>> create_plan(const int *perm, int dim, float alpha,
                                               const float *input, const int *size,

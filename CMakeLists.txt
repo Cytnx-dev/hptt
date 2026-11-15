@@ -424,13 +424,13 @@ if(HPTT_BUILD_TESTS)
                 OMP_THREAD_LIMIT=16 OMP_MAX_ACTIVE_LEVELS=1 ${ARGN}
                 $<TARGET_FILE:hptt_environment_test> ${expected})
     endfunction()
-    hptt_environment_case(default 1)
-    hptt_environment_case(omp 4 OMP_NUM_THREADS=4)
-    hptt_environment_case(omp_list 2 OMP_NUM_THREADS=2,1)
+    hptt_environment_case(default runtime)
+    hptt_environment_case(omp runtime OMP_NUM_THREADS=4)
+    hptt_environment_case(omp_list runtime OMP_NUM_THREADS=2,1)
     hptt_environment_case(hptt 3 HPTT_NUM_THREADS=3)
     hptt_environment_case(precedence 2 HPTT_NUM_THREADS=2 OMP_NUM_THREADS=4)
     hptt_environment_case(whitespace 2 "HPTT_NUM_THREADS= 2 ")
-    hptt_environment_case(omp_whitespace 2 "OMP_NUM_THREADS= 2 , 1 ")
+    hptt_environment_case(omp_whitespace runtime "OMP_NUM_THREADS= 2 , 1 ")
     hptt_environment_case(zero HPTT_NUM_THREADS HPTT_NUM_THREADS=0 OMP_NUM_THREADS=2)
     hptt_environment_case(negative HPTT_NUM_THREADS HPTT_NUM_THREADS=-1)
     hptt_environment_case(empty HPTT_NUM_THREADS HPTT_NUM_THREADS=)
@@ -438,6 +438,26 @@ if(HPTT_BUILD_TESTS)
     hptt_environment_case(hptt_list HPTT_NUM_THREADS HPTT_NUM_THREADS=2,1)
     hptt_environment_case(int_overflow HPTT_NUM_THREADS HPTT_NUM_THREADS=2147483648)
     hptt_environment_case(long_overflow HPTT_NUM_THREADS HPTT_NUM_THREADS=999999999999999999999999)
-    hptt_environment_case(omp_trailing_comma OMP_NUM_THREADS OMP_NUM_THREADS=2,)
-    hptt_environment_case(omp_bad_tail OMP_NUM_THREADS OMP_NUM_THREADS=2,0)
+endif()
+
+# Observe actual libgomp teams without adding instrumentation to the library.
+if(HPTT_BUILD_TESTS AND CMAKE_SYSTEM_NAME STREQUAL "Linux"
+   AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND "gomp" IN_LIST OpenMP_CXX_LIB_NAMES)
+    add_executable(hptt_openmp_runtime_test tests/openmp_runtime_test.cpp)
+    target_link_libraries(hptt_openmp_runtime_test PRIVATE hptt::hptt_static)
+    target_link_options(hptt_openmp_runtime_test PRIVATE -Wl,--wrap=GOMP_parallel)
+    foreach(inner IN ITEMS 1 2)
+        add_test(NAME openmp_runtime_4_${inner}
+            COMMAND ${CMAKE_COMMAND} -E env --unset=HPTT_NUM_THREADS
+                OMP_NUM_THREADS=4,${inner} OMP_DYNAMIC=FALSE OMP_MAX_ACTIVE_LEVELS=2
+                OMP_THREAD_LIMIT=32 $<TARGET_FILE:hptt_openmp_runtime_test> ${inner})
+    endforeach()
+    add_test(NAME openmp_runtime_unset
+        COMMAND ${CMAKE_COMMAND} -E env --unset=HPTT_NUM_THREADS --unset=OMP_NUM_THREADS
+            OMP_DYNAMIC=FALSE OMP_MAX_ACTIVE_LEVELS=2 OMP_THREAD_LIMIT=32
+            $<TARGET_FILE:hptt_openmp_runtime_test> 4)
+    add_test(NAME openmp_runtime_override
+        COMMAND ${CMAKE_COMMAND} -E env HPTT_NUM_THREADS=2 OMP_NUM_THREADS=4,1
+            OMP_DYNAMIC=FALSE OMP_MAX_ACTIVE_LEVELS=2 OMP_THREAD_LIMIT=32
+            $<TARGET_FILE:hptt_openmp_runtime_test> 1 2)
 endif()

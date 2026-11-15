@@ -20,38 +20,24 @@
 #include <climits>
 #include <cstdlib>
 #include <stdexcept>
-#include <string>
 
 #include <hptt.h>
 
 namespace hptt {
 
 namespace {
-int parse_thread_count(const char *text, const char *name, bool allow_list) {
-  const std::string error =
-      std::string(name) + (allow_list ? " must be a comma-separated list of positive integers"
-                                      : " must be a positive integer");
-  int first = 0;
-  for (;;) {
-    errno = 0;
-    char *end = nullptr;
-    const long value = std::strtol(text, &end, 10);
-    if (end == text || errno == ERANGE || value < 1 || value > INT_MAX)
-      throw std::invalid_argument(error);
-    if (first == 0) first = static_cast<int>(value);
-    while (std::isspace(static_cast<unsigned char>(*end))) ++end;
-    if (*end == '\0') return first;
-    if (!allow_list || *end != ',') throw std::invalid_argument(error);
-    text = end + 1;
-  }
-}
-
-int default_thread_count() {
-  if (const char *value = std::getenv("HPTT_NUM_THREADS"))
-    return parse_thread_count(value, "HPTT_NUM_THREADS", false);
-  if (const char *value = std::getenv("OMP_NUM_THREADS"))
-    return parse_thread_count(value, "OMP_NUM_THREADS", true);
-  return 1;
+int configured_thread_count() {
+  const char *text = std::getenv("HPTT_NUM_THREADS");
+  if (text == nullptr) return 0;  // Follow the OpenMP runtime at each execution.
+  errno = 0;
+  char *end = nullptr;
+  const long value = std::strtol(text, &end, 10);
+  if (end == text || errno == ERANGE || value < 1 || value > INT_MAX)
+    throw std::invalid_argument("HPTT_NUM_THREADS must be a positive integer");
+  while (std::isspace(static_cast<unsigned char>(*end))) ++end;
+  if (*end != '\0')
+    throw std::invalid_argument("HPTT_NUM_THREADS must be a positive integer");
+  return static_cast<int>(value);
 }
 }  // namespace
 
@@ -61,7 +47,7 @@ std::shared_ptr<Transpose<float>> create_plan(const int *perm, int dim, float al
                                               float *output, const int *outer_size_output,
                                               SelectionMethod selection_method, Layout layout) {
   return create_plan(perm, dim, alpha, input, size, outer_size_input, beta, output,
-                     outer_size_output, selection_method, default_thread_count(), nullptr,
+                     outer_size_output, selection_method, configured_thread_count(), nullptr,
                      layout == Layout::RowMajor);
 }
 
@@ -71,7 +57,7 @@ std::shared_ptr<Transpose<double>> create_plan(const int *perm, int dim, double 
                                                double *output, const int *outer_size_output,
                                                SelectionMethod selection_method, Layout layout) {
   return create_plan(perm, dim, alpha, input, size, outer_size_input, beta, output,
-                     outer_size_output, selection_method, default_thread_count(), nullptr,
+                     outer_size_output, selection_method, configured_thread_count(), nullptr,
                      layout == Layout::RowMajor);
 }
 
@@ -80,7 +66,7 @@ std::shared_ptr<Transpose<FloatComplex>> create_plan(
     const int *outer_size_input, FloatComplex beta, FloatComplex *output,
     const int *outer_size_output, SelectionMethod selection_method, Layout layout) {
   return create_plan(perm, dim, alpha, input, size, outer_size_input, beta, output,
-                     outer_size_output, selection_method, default_thread_count(), nullptr,
+                     outer_size_output, selection_method, configured_thread_count(), nullptr,
                      layout == Layout::RowMajor);
 }
 
@@ -89,7 +75,7 @@ std::shared_ptr<Transpose<DoubleComplex>> create_plan(
     const int *outer_size_input, DoubleComplex beta, DoubleComplex *output,
     const int *outer_size_output, SelectionMethod selection_method, Layout layout) {
   return create_plan(perm, dim, alpha, input, size, outer_size_input, beta, output,
-                     outer_size_output, selection_method, default_thread_count(), nullptr,
+                     outer_size_output, selection_method, configured_thread_count(), nullptr,
                      layout == Layout::RowMajor);
 }
 

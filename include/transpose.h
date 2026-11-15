@@ -65,7 +65,8 @@ class Transpose
        *                            auto-tuning process. The original data (i.e., A and B), however, is preserved
        *                            after this function call completes -- unless your input
        *                            data (i.e. A) has invalid data (e.g., NaN, inf).
-       * \param[in] numThreads number of threads that participate in this tensor transposition.
+       * \param[in] numThreads Requested thread count; 0 follows the current OpenMP runtime.
+       *            Automatic mode does not accept a cooperative thread-ID list.
        * \param[in] threadIds Array of OpenMP threadIds that participate in this
        *            tensor transposition. This parameter is only important if you want to call
        *            HPTT from within a parallel region (i.e., via execute_expert()).
@@ -96,8 +97,13 @@ class Transpose
        ***************************************************/
       bool getConjA() noexcept { return conjA_; }
       void setConjA(bool conjA) noexcept { conjA_ = conjA; }
-      int getNumThreads() const noexcept { return numThreads_; }
-      void setNumThreads(int numThreads) noexcept { numThreads_ = numThreads; }
+      // Requested count in the current execution context, not the actual team size.
+      int getNumThreads() const noexcept;
+      // A positive count selects an explicit override; 0 restores OpenMP defaults.
+      void setNumThreads(int numThreads) noexcept {
+         use_openmp_defaults = numThreads == 0;
+         if (!use_openmp_defaults) numThreads_ = numThreads;
+      }
       floatType getAlpha() const noexcept { return alpha_; }
       floatType getBeta() const noexcept { return beta_; }
       /**
@@ -192,7 +198,8 @@ class Transpose
        *                         expected that this function call executes from
        *                         within a parallel region. Only this cooperative
        *                         mode uses the plan's participating thread IDs;
-       *                         callers must supply all configured participants.
+       *                         callers must select an explicit thread count and
+       *                         supply all configured participants.
        * \param[in] betaIsZero   Only set this variable if beta is zero.
        */
       template<bool useStreamingStores=true, bool spawnThreads=true, bool betaIsZero>
@@ -220,7 +227,7 @@ class Transpose
       double loopCostHeuristic( const std::vector<int> &loopOrder ) const;
       double parallelismCostHeuristic( const std::vector<int> &loopOrder ) const;
       template<bool useStreamingStores, bool spawnThreads, bool betaIsZero, bool cooperative>
-      void execute_impl() noexcept;
+      void execute_impl(int execution_threads) noexcept;
       int getLocalThreadId(int myThreadId) const;
       template<bool cooperative>
       void getStartEnd(int n, int &myStart, int &myEnd) const;
@@ -265,7 +272,8 @@ class Transpose
       std::vector<size_t> lda_;  //!< strides for all dimensions of A (first dimension has a stride of 1)
       std::vector<size_t> ldb_;  //!< strides for all dimensions of B (first dimension has a stride of 1)
       std::vector<int> threadIds_; //!< OpenMP threadIds of the threads involed in the transposition
-      int numThreads_;
+      int numThreads_;  // Fixed planning/partition count.
+      bool use_openmp_defaults;
       int selectedParallelStrategyId_;
       int selectedLoopOrderId_;
       bool conjA_;
