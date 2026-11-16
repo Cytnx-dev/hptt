@@ -1724,22 +1724,23 @@ void Transpose<floatType>::getBestLoopOrder( std::vector<int> &loopOrder ) const
    {
       // prefer accesses to B over those to A (Rationale: reduce TLB misses)
       for(int i=0;i < dim_ ; ++i) 
-         loopOrder[dim_-1-i] = dim_-1-i; //innermost loop idx is stored at dim_-1
+         loopOrder[dim_-1-i] = perm_[i]; // output stride-one axis must be innermost
       return;
    }
 
    // create cost matrix; cost[i,idx] === cost for idx being at loop-level i
    // dim_ is a runtime value, and variable-length arrays are a GNU
    // extension that MSVC rejects (C2131).
+   // Evaluate powers of two in double: integer shifts/penalties overflow at high ranks.
    std::vector<double> costs(dim_*dim_);
    for(int i=0;i < dim_ ; ++i){
       for(int idx=0;idx < dim_ ; ++idx){ //idx is at loop i
          double cost = 0;
          if( i != 0 ){
             const int posB = findPos(idx, perm_);
-            const int importanceA = (1<<(dim_ - idx)); // stride-1 has the most importance ...
-            const int importanceB = (1<<(dim_ - posB));                // subsequent indices are half as important
-            const int penalty = 10 * (1<<(i-1));
+            const double importanceA = std::ldexp(1.0, dim_ - idx); // stride-1 has the most importance ...
+            const double importanceB = std::ldexp(1.0, dim_ - posB);                // subsequent indices are half as important
+            const double penalty = std::ldexp(10.0, i - 1);
             constexpr double bias = 1.01;
             cost = (importanceA + importanceB * bias) * penalty;
          }
@@ -1760,6 +1761,10 @@ void Transpose<floatType>::getBestLoopOrder( std::vector<int> &loopOrder ) const
       double maxValueAll = 0;
       for(auto c : availIndices)
       {
+         // The first selected axis becomes innermost. Scalar remainders require
+         // one of the two designated inner axes, independently of heuristic costs.
+         if( i == 0 && c != 0 && c != perm_[0] )
+            continue;
          double maxValue = 0;
          for(auto r : availLoopLevels){
             const double val = costs[c * dim_ + r];
@@ -1805,9 +1810,9 @@ double Transpose<floatType>::loopCostHeuristic( const std::vector<int> &loopOrde
    for(int i=1;i < dim_ ; ++i){
       const int idx = loopOrder[dim_-1-i];
       const int posB = findPos(idx, perm_);
-      const int importanceA = (1<<(dim_ - idx)); // stride-1 has the most importance ...
-      const int importanceB = (1<<(dim_ - posB));                // subsequent indices are half as important
-      const int penalty = 10 * (1<<(i-1));
+      const double importanceA = std::ldexp(1.0, dim_ - idx); // stride-1 has the most importance ...
+      const double importanceB = std::ldexp(1.0, dim_ - posB);                // subsequent indices are half as important
+      const double penalty = std::ldexp(10.0, i - 1);
       double bias = 1.01;
       loopCost += (importanceA + importanceB * bias) * penalty;
    } 
@@ -1831,8 +1836,9 @@ void Transpose<floatType>::getLoopOrders(std::vector<std::vector<int> > &loopOrd
 
    // create all loopOrders
    do {
-      if ( perm_[0] == 0 && loopOrder[dim_-1] != 0 )
-         continue; // ATTENTION: we skip all loop-orders where the stride-1 index is not the inner-most loop iff perm[0] == 0 (both for perf & correctness)
+      // Scalar remainder kernels require one of the two transposed axes innermost.
+      if ( loopOrder[dim_-1] != 0 && loopOrder[dim_-1] != perm_[0] )
+         continue;
 
       loopOrders.push_back(loopOrder);
    } while(std::next_permutation(loopOrder.begin(), loopOrder.end()));
