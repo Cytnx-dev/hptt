@@ -15,9 +15,115 @@
 #include <vector>
 #include <memory>
 
-#include <transpose.h>
+#include <cerrno>
+#include <cctype>
+#include <climits>
+#include <cstdlib>
+#include <stdexcept>
+
+#include <hptt.h>
 
 namespace hptt {
+
+namespace {
+int configured_thread_count() {
+  const char *text = std::getenv("HPTT_NUM_THREADS");
+  if (text == nullptr) return 0;  // Follow the OpenMP runtime at each execution.
+  errno = 0;
+  char *end = nullptr;
+  const long value = std::strtol(text, &end, 10);
+  if (end == text || errno == ERANGE || value < 1 || value > INT_MAX)
+    throw std::invalid_argument("HPTT_NUM_THREADS must be a positive integer");
+  while (std::isspace(static_cast<unsigned char>(*end))) ++end;
+  if (*end != '\0')
+    throw std::invalid_argument("HPTT_NUM_THREADS must be a positive integer");
+  return static_cast<int>(value);
+}
+}  // namespace
+
+std::shared_ptr<Transpose<float>> create_plan(const int *perm, int dim, float alpha,
+                                              const float *input, const int *size,
+                                              const int *outer_size_input, float beta,
+                                              float *output, const int *outer_size_output,
+                                              SelectionMethod selection_method, Layout layout) {
+  return create_plan(perm, dim, alpha, input, size, outer_size_input, beta, output,
+                     outer_size_output, selection_method, configured_thread_count(), nullptr,
+                     layout == Layout::RowMajor);
+}
+
+std::shared_ptr<Transpose<double>> create_plan(const int *perm, int dim, double alpha,
+                                               const double *input, const int *size,
+                                               const int *outer_size_input, double beta,
+                                               double *output, const int *outer_size_output,
+                                               SelectionMethod selection_method, Layout layout) {
+  return create_plan(perm, dim, alpha, input, size, outer_size_input, beta, output,
+                     outer_size_output, selection_method, configured_thread_count(), nullptr,
+                     layout == Layout::RowMajor);
+}
+
+std::shared_ptr<Transpose<FloatComplex>> create_plan(
+    const int *perm, int dim, FloatComplex alpha, const FloatComplex *input, const int *size,
+    const int *outer_size_input, FloatComplex beta, FloatComplex *output,
+    const int *outer_size_output, SelectionMethod selection_method, Layout layout) {
+  return create_plan(perm, dim, alpha, input, size, outer_size_input, beta, output,
+                     outer_size_output, selection_method, configured_thread_count(), nullptr,
+                     layout == Layout::RowMajor);
+}
+
+std::shared_ptr<Transpose<DoubleComplex>> create_plan(
+    const int *perm, int dim, DoubleComplex alpha, const DoubleComplex *input, const int *size,
+    const int *outer_size_input, DoubleComplex beta, DoubleComplex *output,
+    const int *outer_size_output, SelectionMethod selection_method, Layout layout) {
+  return create_plan(perm, dim, alpha, input, size, outer_size_input, beta, output,
+                     outer_size_output, selection_method, configured_thread_count(), nullptr,
+                     layout == Layout::RowMajor);
+}
+
+std::shared_ptr<Transpose<float>> create_plan(const std::vector<int> &perm, int dim, float alpha,
+                                              const float *input, const std::vector<int> &size,
+                                              const std::vector<int> &outer_size_input, float beta,
+                                              float *output,
+                                              const std::vector<int> &outer_size_output,
+                                              SelectionMethod selection_method, Layout layout) {
+  return create_plan(perm.data(), dim, alpha, input, size.data(),
+                     outer_size_input.empty() ? nullptr : outer_size_input.data(), beta, output,
+                     outer_size_output.empty() ? nullptr : outer_size_output.data(),
+                     selection_method, layout);
+}
+
+std::shared_ptr<Transpose<double>> create_plan(const std::vector<int> &perm, int dim, double alpha,
+                                               const double *input, const std::vector<int> &size,
+                                               const std::vector<int> &outer_size_input,
+                                               double beta, double *output,
+                                               const std::vector<int> &outer_size_output,
+                                               SelectionMethod selection_method, Layout layout) {
+  return create_plan(perm.data(), dim, alpha, input, size.data(),
+                     outer_size_input.empty() ? nullptr : outer_size_input.data(), beta, output,
+                     outer_size_output.empty() ? nullptr : outer_size_output.data(),
+                     selection_method, layout);
+}
+
+std::shared_ptr<Transpose<FloatComplex>> create_plan(
+    const std::vector<int> &perm, int dim, FloatComplex alpha, const FloatComplex *input,
+    const std::vector<int> &size, const std::vector<int> &outer_size_input, FloatComplex beta,
+    FloatComplex *output, const std::vector<int> &outer_size_output,
+    SelectionMethod selection_method, Layout layout) {
+  return create_plan(perm.data(), dim, alpha, input, size.data(),
+                     outer_size_input.empty() ? nullptr : outer_size_input.data(), beta, output,
+                     outer_size_output.empty() ? nullptr : outer_size_output.data(),
+                     selection_method, layout);
+}
+
+std::shared_ptr<Transpose<DoubleComplex>> create_plan(
+    const std::vector<int> &perm, int dim, DoubleComplex alpha, const DoubleComplex *input,
+    const std::vector<int> &size, const std::vector<int> &outer_size_input, DoubleComplex beta,
+    DoubleComplex *output, const std::vector<int> &outer_size_output,
+    SelectionMethod selection_method, Layout layout) {
+  return create_plan(perm.data(), dim, alpha, input, size.data(),
+                     outer_size_input.empty() ? nullptr : outer_size_input.data(), beta, output,
+                     outer_size_output.empty() ? nullptr : outer_size_output.data(),
+                     selection_method, layout);
+}
 
 std::shared_ptr<hptt::Transpose<float> > create_plan( const int *perm, const int dim,
                   const float alpha, const float *A, const int *sizeA, const int *outerSizeA, 

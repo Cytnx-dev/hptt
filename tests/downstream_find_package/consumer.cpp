@@ -119,6 +119,16 @@ int main() {
   run<std::complex<double>>("cdouble 3D large", {64, 32, 16}, {2, 0, 1},
                             std::complex<double>(1.0, 0.0), std::complex<double>(0.0, 0.0), 4, dtol);
 
+  // Check that the automatic overload is exported by both library variants.
+  const int auto_size[] = {2, 3}, auto_perm[] = {1, 0};
+  const double auto_input[] = {-1.5, 2.0, 0.25, 4.0, -0.5, 6.0};
+  double auto_output[6] = {};
+  const double auto_expected[] = {-1.5, 4.0, 2.0, -0.5, 0.25, 6.0};
+  auto auto_plan = hptt::create_plan(auto_perm, 2, 1.0, auto_input, auto_size, nullptr, 0.0,
+                                     auto_output, nullptr, hptt::ESTIMATE, hptt::Layout::RowMajor);
+  auto_plan->execute();
+  for (int i = 0; i < 6; ++i) failures += auto_output[i] != auto_expected[i];
+
   if (failures) {
     std::printf("\n%d FAILURE(S)\n", failures);
     return 1;

@@ -81,7 +81,7 @@ In general HPTT is used as follows:
     auto plan = hptt::create_plan( perm, dim, 
                                    alpha, A, size, NULL, 
                                    beta,  B, NULL, 
-                                   hptt::ESTIMATE, numThreads);
+                                   hptt::ESTIMATE);
 
     // execute the transposition
     plan->execute();
@@ -89,6 +89,62 @@ In general HPTT is used as follows:
 The example above does not use any auto-tuning, but solely relies on HPTT's
 performance model. To active auto-tuning, please use hptt::MEASURE, or
 hptt::PATIENT instead of hptt::ESTIMATE.
+
+
+## Automatic threading (C++)
+
+The `create_plan` overloads without a thread count follow OpenMP's current
+configuration when the plan executes. HPTT asks the runtime for the calling
+task's requested count; it does not parse `OMP_NUM_THREADS` itself. For example,
+`OMP_NUM_THREADS=4,1` requests four workers at the first parallel level and one
+at the next. Later `omp_set_num_threads()` calls take effect on subsequent
+executions, including when a plan is reused in another parallel context.
+With no environment settings, OpenMP's implementation-defined default applies.
+
+`HPTT_NUM_THREADS` provides an explicit override, captured at plan creation.
+It must be a positive integer; empty, malformed, zero, negative, or out-of-range
+values throw `std::invalid_argument`. Set `HPTT_NUM_THREADS=1` for single-threaded
+HPTT operations independently of OpenMP's default. The existing explicit-count
+factory overloads take precedence over this environment variable.
+
+Planning uses the requested count at construction to decompose the work. That
+decomposition stays fixed, while each execution distributes all work items
+across the selected team. Changing contexts or runtime settings does not mutate
+or rebuild the plan. OpenMP's nesting, dynamic-team and thread-limit controls
+still apply, so the actual team can be smaller than the requested count.
+`getNumThreads()` reports the request in the current context, not the actual
+team size. `setNumThreads(n)` selects a positive fixed override; passing zero
+restores automatic OpenMP selection. A zero count in the legacy C++ factory or
+constructor also selects this mode and must not be combined with a thread-ID list.
+
+Column-major storage is the default. For row-major storage, use the named layout:
+
+```cpp
+auto plan = hptt::create_plan(perm, dim, alpha, A, size, nullptr,
+                              beta, B, nullptr, hptt::ESTIMATE,
+                              hptt::Layout::RowMajor);
+plan->execute();
+```
+
+Array and `std::vector<int>` overloads support all four scalar types. Existing
+explicit-count overloads remain available and bypass environment selection.
+The C and Python interfaces retain their existing thread-count configuration.
+
+The additional state in `Transpose<T>` changes its C++ binary layout. Rebuild
+HPTT and all C++ consumers together when upgrading; do not mix objects compiled
+with the old headers with the new library. Such a mixture can link successfully
+but silently misbehave through inline accessors such as `setConjA()`.
+
+`execute()` always completes the entire transpose, including when called by a
+nonzero worker in an outer OpenMP region or when OpenMP reduces the inner team.
+It ignores cooperative thread-ID lists. `execute_expert<..., true, ...>()` also
+executes a complete operation. Only `execute_expert<..., false, ...>()` partitions
+work among the specified participating threads; it requires an explicit
+thread count and all configured participants must call it. Concurrent independent
+operations need distinct output buffers.
+
+To run the C++ regressions, configure with `-DHPTT_BUILD_TESTS=ON`, build, and run
+`ctest --test-dir <build-directory> --output-on-failure`.
 
 
 ## C-Interface
