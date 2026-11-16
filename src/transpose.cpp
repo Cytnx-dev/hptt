@@ -578,9 +578,9 @@ void transpose_int_scalar( const floatType* HPTT_RESTRICT A, int sizeStride1A,
    if( plan->next->next != nullptr ){
       // recurse
       int i = plan->start;
-      if( lda == 1)
+      if( plan->is_input_inner)
          transpose_int_scalar<betaIsZero, floatType, conjA>( &A[i*lda], end - plan->start, &B[i*ldb], sizeStride1B, alpha, beta, plan->next);
-      else if( ldb == 1)
+      else if( plan->is_output_inner)
          transpose_int_scalar<betaIsZero, floatType, conjA>( &A[i*lda], sizeStride1A, &B[i*ldb], end - plan->start, alpha, beta, plan->next);
       else
          for(; i < end; i++)
@@ -592,9 +592,9 @@ void transpose_int_scalar( const floatType* HPTT_RESTRICT A, int sizeStride1A,
       int i = plan->start;
       const size_t scalarRemainder = plan->end - plan->start;
       if( scalarRemainder > 0 ){
-         if( lda == 1)
+         if( plan->is_input_inner)
             macro_kernel_scalar<betaIsZero,floatType, conjA>(&A[i*lda], lda_macro, scalarRemainder, &B[i*ldb], ldb_macro, sizeStride1B, alpha, beta);
-         else if( ldb == 1)
+         else if( plan->is_output_inner)
             macro_kernel_scalar<betaIsZero,floatType, conjA>(&A[i*lda], lda_macro, sizeStride1A, &B[i*ldb], ldb_macro, scalarRemainder, alpha, beta);
       }
    }
@@ -624,22 +624,22 @@ void transpose_int( const floatType* HPTT_RESTRICT A, const floatType* HPTT_REST
       }
       // remainder
       if( blocking_/2 >= blocking_micro_ && (i + blocking_/2) <= plan->end ){
-         if( lda == 1)
+         if( plan->is_input_inner)
             transpose_int<blocking_/2, blockingB, betaIsZero, floatType, useStreamingStores, conjA>( &A[i*lda], Anext, &B[i*ldb], Bnext, alpha, beta, plan->next);
-         else if( ldb == 1)
+         else if( plan->is_output_inner)
             transpose_int<blockingA, blocking_/2, betaIsZero, floatType, useStreamingStores, conjA>( &A[i*lda], Anext, &B[i*ldb], Bnext, alpha, beta, plan->next);
          i+=blocking_/2;
       }
       if( blocking_/4 >= blocking_micro_ && (i + blocking_/4) <= plan->end ){
-         if( lda == 1)
+         if( plan->is_input_inner)
             transpose_int<blocking_/4, blockingB, betaIsZero, floatType, useStreamingStores, conjA>( &A[i*lda], Anext, &B[i*ldb], Bnext, alpha, beta, plan->next);
-         else if( ldb == 1)
+         else if( plan->is_output_inner)
             transpose_int<blockingA, blocking_/4, betaIsZero, floatType, useStreamingStores, conjA>( &A[i*lda], Anext, &B[i*ldb], Bnext, alpha, beta, plan->next);
          i+=blocking_/4;
       }
       const size_t scalarRemainder = plan->end - i;
       if( scalarRemainder > 0 ){
-         if( lda == 1)
+         if( plan->is_input_inner)
             transpose_int_scalar<betaIsZero, floatType, conjA>( &A[i*lda], scalarRemainder, &B[i*ldb], -1, alpha, beta, plan->next);
          else
             transpose_int_scalar<betaIsZero, floatType, conjA>( &A[i*lda], -1, &B[i*ldb], scalarRemainder, alpha, beta, plan->next);
@@ -657,24 +657,24 @@ void transpose_int( const floatType* HPTT_RESTRICT A, const floatType* HPTT_REST
             macro_kernel<blockingA, blockingB, betaIsZero,floatType, useStreamingStores, conjA>(&A[i*lda], Anext, lda_macro, &B[i*ldb], Bnext, ldb_macro, alpha, beta);
       // remainder
       if( blocking_/2 >= blocking_micro_ && (i + blocking_/2) <= plan->end ){
-         if( lda == 1)
+         if( plan->is_input_inner)
             macro_kernel<blocking_/2, blockingB, betaIsZero,floatType, useStreamingStores, conjA>(&A[i*lda], Anext, lda_macro, &B[i*ldb], Bnext, ldb_macro, alpha, beta);
-         else if( ldb == 1)
+         else if( plan->is_output_inner)
             macro_kernel<blockingA, blocking_/2, betaIsZero,floatType, useStreamingStores, conjA>(&A[i*lda], Anext, lda_macro, &B[i*ldb], Bnext, ldb_macro, alpha, beta);
          i+=blocking_/2;
       }
       if( blocking_/4 >= blocking_micro_ && (i + blocking_/4) <= plan->end ){
-         if( lda == 1)
+         if( plan->is_input_inner)
             macro_kernel<blocking_/4, blockingB, betaIsZero,floatType, useStreamingStores, conjA>(&A[i*lda], Anext, lda_macro, &B[i*ldb], Bnext, ldb_macro, alpha, beta);
-         else if( ldb == 1)
+         else if( plan->is_output_inner)
             macro_kernel<blockingA, blocking_/4, betaIsZero,floatType, useStreamingStores, conjA>(&A[i*lda], Anext, lda_macro, &B[i*ldb], Bnext, ldb_macro, alpha, beta);
          i+=blocking_/4;
       }
       const size_t scalarRemainder = plan->end - i;
       if( scalarRemainder > 0 ){
-         if( lda == 1)
+         if( plan->is_input_inner)
             macro_kernel_scalar<betaIsZero,floatType, conjA>(&A[i*lda], lda_macro, scalarRemainder, &B[i*ldb], ldb_macro, blockingB, alpha, beta);
-         else if( ldb == 1)
+         else if( plan->is_output_inner)
             macro_kernel_scalar<betaIsZero,floatType, conjA>(&A[i*lda], lda_macro, blockingA, &B[i*ldb], ldb_macro, scalarRemainder, alpha, beta);
       }
    }
@@ -1965,6 +1965,8 @@ void Transpose<floatType>::createPlans( std::vector<std::shared_ptr<Plan> > &pla
                   currentNode->start = std::min( sizeA_[index], commId * workPerThread * currentNode->inc );
                   currentNode->end = std::min( sizeA_[index], (commId+1) * workPerThread * currentNode->inc );
 
+                  currentNode->is_input_inner = (index == 0);
+                  currentNode->is_output_inner = (index == posStride1B_inA);
                   currentNode->lda = lda_[index];
                   currentNode->ldb = ldb_[findPos(index, perm_)];
 
